@@ -1,0 +1,308 @@
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import { Timer as TimerIcon, BarChart3, Moon, Sun, CalendarDays, Grid2x2, Heart, Settings as SettingsIcon } from "lucide-react";
+import { MODES, THEMES } from "./theme";
+import { uid, fmt, todayKey, minutesSinceMidnight, addDays } from "./utils/dates";
+
+import TimerScreen from "./components/TimerScreen";
+import PlannerScreen from "./components/PlannerScreen";
+import MatrixScreen from "./components/MatrixScreen";
+import ProgressScreen from "./components/ProgressScreen";
+import MotivationScreen from "./components/MotivationScreen";
+import SettingsScreen from "./components/SettingsScreen";
+import LogTimeModal from "./components/LogTimeModal";
+
+const localStorageAdapter = {
+  async get(key) {
+    try {
+      const value = window.localStorage.getItem(key);
+      return value ? { value } : null;
+    } catch (error) {
+      console.error("Storage get failed", error);
+      return null;
+    }
+  },
+  async set(key, value) {
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (error) {
+      console.error("Storage set failed", error);
+    }
+  }
+};
+
+export default function FocusApp() {
+  const [dark, setDark] = useState(false);
+  const [themeName, setThemeName] = useState("sage");
+  const [screen, setScreen] = useState("timer");
+  const [loaded, setLoaded] = useState(false);
+
+  const [modeKey, setModeKey] = useState("pomodoro");
+  const [phase, setPhase] = useState("work");
+  const [running, setRunning] = useState(false);
+  const [secondsLeft, setSecondsLeft] = useState(MODES.pomodoro.work);
+  const [stopwatchSecs, setStopwatchSecs] = useState(0);
+
+  const [tasks, setTasks] = useState([]);
+  const [newTask, setNewTask] = useState("");
+  const [activeTaskId, setActiveTaskId] = useState(null);
+
+  const [sessions, setSessions] = useState([]);
+  const [customDurations, setCustomDurations] = useState({ pomodoro: { work: 25, rest: 5 }, deepwork: { work: 40, rest: 10 } });
+  const [dailyGoalMinutes, setDailyGoalMinutes] = useState(180);
+  const [sleepSettings, setSleepSettings] = useState({ enabled: true, start: "23:00", end: "07:00" });
+  const [dayStartHour, setDayStartHour] = useState(0);
+  const [showLogModal, setShowLogModal] = useState(false);
+
+  const [eisenhower, setEisenhower] = useState([]); // {id,text,quadrant,done,notes,subtasks:[{id,text,done}]}
+  const [planner, setPlanner] = useState({});
+  const [consistencyTasks, setConsistencyTasks] = useState([]); // {id, text, completedDates: string[]}
+  const [whyText, setWhyText] = useState("");
+  const [motivationLog, setMotivationLog] = useState([]);
+  const [challengesLog, setChallengesLog] = useState([]); // {id, date, challenge, solution}
+  const [compareDates, setCompareDates] = useState([]);
+
+  const intervalRef = useRef(null);
+  const sessionStartRef = useRef(null);
+  const saveTimeout = useRef({});
+
+  const storageApi = typeof window !== "undefined" && window.storage ? window.storage : localStorageAdapter;
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const keys = ["tasks", "sessions", "durations", "theme", "themeName", "goal", "eisenhower", "planner", "whyText", "motivationLog", "compareDates", "challengesLog", "sleepSettings", "dayStartHour", "consistencyTasks"];
+        const results = await Promise.allSettled(keys.map((k) => storageApi.get(k, false)));
+        const [t, s, c, th, tn, g, ei, pl, why, mo, cd, ch, sl, dsh, ct] = results;
+        if (t.status === "fulfilled" && t.value) setTasks(JSON.parse(t.value.value));
+        if (s.status === "fulfilled" && s.value) setSessions(JSON.parse(s.value.value));
+        if (c.status === "fulfilled" && c.value) {
+          const parsed = JSON.parse(c.value.value);
+          setCustomDurations(parsed);
+          setSecondsLeft(parsed.pomodoro.work * 60);
+        }
+        if (th.status === "fulfilled" && th.value) setDark(JSON.parse(th.value.value));
+        if (tn.status === "fulfilled" && tn.value) setThemeName(JSON.parse(tn.value.value));
+        if (g.status === "fulfilled" && g.value) setDailyGoalMinutes(JSON.parse(g.value.value));
+        if (ei.status === "fulfilled" && ei.value) setEisenhower(JSON.parse(ei.value.value));
+        if (pl.status === "fulfilled" && pl.value) setPlanner(JSON.parse(pl.value.value));
+        if (why.status === "fulfilled" && why.value) setWhyText(JSON.parse(why.value.value));
+        if (mo.status === "fulfilled" && mo.value) setMotivationLog(JSON.parse(mo.value.value));
+        if (cd.status === "fulfilled" && cd.value) setCompareDates(JSON.parse(cd.value.value));
+        if (ch.status === "fulfilled" && ch.value) setChallengesLog(JSON.parse(ch.value.value));
+        if (sl.status === "fulfilled" && sl.value) setSleepSettings(JSON.parse(sl.value.value));
+        if (dsh.status === "fulfilled" && dsh.value) setDayStartHour(JSON.parse(dsh.value.value));
+        if (ct.status === "fulfilled" && ct.value) setConsistencyTasks(JSON.parse(ct.value.value));
+      } catch (e) { console.error("Load error", e); }
+      finally { setLoaded(true); }
+    })();
+  }, [storageApi]);
+
+  const persist = useCallback((key, value) => {
+    clearTimeout(saveTimeout.current[key]);
+    saveTimeout.current[key] = setTimeout(async () => {
+      try { await storageApi.set(key, JSON.stringify(value), false); }
+      catch (e) { console.error("Save error", e); }
+    }, 300);
+  }, [storageApi]);
+
+  useEffect(() => { if (loaded) persist("tasks", tasks); }, [tasks, loaded, persist]);
+  useEffect(() => { if (loaded) persist("sessions", sessions); }, [sessions, loaded, persist]);
+  useEffect(() => { if (loaded) persist("durations", customDurations); }, [customDurations, loaded, persist]);
+  useEffect(() => { if (loaded) persist("theme", dark); }, [dark, loaded, persist]);
+  useEffect(() => { if (loaded) persist("themeName", themeName); }, [themeName, loaded, persist]);
+  useEffect(() => { if (loaded) persist("goal", dailyGoalMinutes); }, [dailyGoalMinutes, loaded, persist]);
+  useEffect(() => { if (loaded) persist("eisenhower", eisenhower); }, [eisenhower, loaded, persist]);
+  useEffect(() => { if (loaded) persist("planner", planner); }, [planner, loaded, persist]);
+  useEffect(() => { if (loaded) persist("whyText", whyText); }, [whyText, loaded, persist]);
+  useEffect(() => { if (loaded) persist("motivationLog", motivationLog); }, [motivationLog, loaded, persist]);
+  useEffect(() => { if (loaded) persist("compareDates", compareDates); }, [compareDates, loaded, persist]);
+  useEffect(() => { if (loaded) persist("challengesLog", challengesLog); }, [challengesLog, loaded, persist]);
+  useEffect(() => { if (loaded) persist("sleepSettings", sleepSettings); }, [sleepSettings, loaded, persist]);
+  useEffect(() => { if (loaded) persist("dayStartHour", dayStartHour); }, [dayStartHour, loaded, persist]);
+  useEffect(() => { if (loaded) persist("consistencyTasks", consistencyTasks); }, [consistencyTasks, loaded, persist]);
+
+  useEffect(() => {
+    if (!running) return;
+    intervalRef.current = setInterval(() => {
+      if (modeKey === "stopwatch") setStopwatchSecs((s) => s + 1);
+      else setSecondsLeft((s) => { if (s <= 1) { handlePhaseEnd(); return 0; } return s - 1; });
+    }, 1000);
+    return () => clearInterval(intervalRef.current);
+  }, [running, modeKey]);
+
+  function beep() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const o = ctx.createOscillator(); const g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value = 660;
+      g.gain.setValueAtTime(0.15, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+      o.start(); o.stop(ctx.currentTime + 0.6);
+    } catch (e) {}
+  }
+
+  function logSession(minutes, mode, startDate, note) {
+    if (minutes <= 0) return;
+    const sd = startDate || new Date();
+    setSessions((prev) => [...prev, { id: uid(), date: todayKey(sd), startMinutes: minutesSinceMidnight(sd), minutes, mode, manual: false, note: note || "" }]);
+  }
+
+  function handlePhaseEnd() {
+    beep();
+    clearInterval(intervalRef.current);
+    setRunning(false);
+    const durs = customDurations[modeKey];
+    const activeTask = tasks.find((tk) => tk.id === activeTaskId);
+    if (phase === "work") {
+      logSession(durs.work, modeKey, sessionStartRef.current ? new Date(sessionStartRef.current) : new Date(), activeTask ? activeTask.text : "");
+      setPhase("rest");
+      setSecondsLeft(durs.rest * 60);
+      if (activeTaskId) setTasks((prev) => prev.map((tk) => (tk.id === activeTaskId ? { ...tk, done: true } : tk)));
+    } else { setPhase("work"); setSecondsLeft(durs.work * 60); }
+  }
+
+  function startPause() {
+    if (!running) { sessionStartRef.current = Date.now(); setRunning(true); }
+    else {
+      setRunning(false); clearInterval(intervalRef.current);
+      if (modeKey === "stopwatch" && stopwatchSecs > 0) {
+        const activeTask = tasks.find((tk) => tk.id === activeTaskId);
+        logSession(Math.round(stopwatchSecs / 60), "stopwatch", new Date(sessionStartRef.current), activeTask ? activeTask.text : "");
+      }
+    }
+  }
+
+  function reset() {
+    setRunning(false); clearInterval(intervalRef.current);
+    if (modeKey === "stopwatch") {
+      if (stopwatchSecs > 0) {
+        const activeTask = tasks.find((tk) => tk.id === activeTaskId);
+        logSession(Math.round(stopwatchSecs / 60), "stopwatch", new Date(sessionStartRef.current), activeTask ? activeTask.text : "");
+      }
+      setStopwatchSecs(0);
+    } else { setPhase("work"); setSecondsLeft(customDurations[modeKey].work * 60); }
+  }
+
+  function switchMode(key) {
+    setRunning(false); clearInterval(intervalRef.current);
+    setModeKey(key); setPhase("work"); setStopwatchSecs(0);
+    if (key !== "stopwatch") setSecondsLeft(customDurations[key].work * 60);
+  }
+
+  function addTask() { const text = newTask.trim(); if (!text) return; setTasks((p) => [...p, { id: uid(), text, done: false }]); setNewTask(""); }
+  function toggleTask(id) { setTasks((p) => p.map((tk) => (tk.id === id ? { ...tk, done: !tk.done } : tk))); }
+  function removeTask(id) { setTasks((p) => p.filter((tk) => tk.id !== id)); if (activeTaskId === id) setActiveTaskId(null); }
+
+  function addManualSession({ date, startTime, hours, minutes, note }) {
+    const total = Math.round((Number(hours) || 0) * 60 + (Number(minutes) || 0));
+    if (total <= 0) return;
+    const [h2, m2] = (startTime || "09:00").split(":").map(Number);
+    setSessions((prev) => [...prev, { id: uid(), date, startMinutes: h2 * 60 + m2, minutes: total, mode: "manual", manual: true, note: note || "" }]);
+    setShowLogModal(false);
+  }
+
+  const totalToday = sessions.filter((s) => s.date === todayKey()).reduce((a, s) => a + s.minutes, 0);
+  const totalAll = sessions.reduce((a, s) => a + s.minutes, 0);
+  const sessionCountToday = sessions.filter((s) => s.date === todayKey()).length;
+
+  function computeStreak() {
+    let streak = 0; let d = new Date();
+    while (true) {
+      const key = todayKey(d);
+      const has = sessions.some((s) => s.date === key);
+      if (!has) { if (streak === 0 && key === todayKey()) { d = addDays(d, -1); continue; } break; }
+      streak++; d = addDays(d, -1);
+    }
+    return streak;
+  }
+  const streak = computeStreak();
+
+  const palette = THEMES[themeName] || THEMES.sage;
+  const t = dark
+    ? { bg: "#1B1E1A", surface: "#22261F", surface2: "#282C24", ink: "#E9E6DD", sub: "#A7A99C", moss: palette.mossD, clay: palette.clayD, line: "#33372E" }
+    : { bg: "#EDEAE3", surface: "#F7F5F0", surface2: "#F1EEE6", ink: "#2B2A28", sub: "#7C7A72", moss: palette.moss, clay: palette.clay, line: "#D8D3C8" };
+
+  const durationTotal = modeKey === "stopwatch" ? null : customDurations[modeKey][phase === "work" ? "work" : "rest"] * 60;
+  const progress = modeKey === "stopwatch" ? 0 : 1 - secondsLeft / durationTotal;
+  const R = 120; const CIRC = 2 * Math.PI * R;
+
+  if (!loaded) {
+    return (
+      <div style={{ minHeight: 400, display: "flex", alignItems: "center", justifyContent: "center", background: t.bg, fontFamily: "system-ui" }}>
+        <span style={{ color: t.sub, fontSize: 14 }}>Loading your focus data…</span>
+      </div>
+    );
+  }
+
+  const NAV = [
+    { key: "timer", icon: TimerIcon, label: "Timer" },
+    { key: "planner", icon: CalendarDays, label: "Planner" },
+    { key: "matrix", icon: Grid2x2, label: "Matrix" },
+    { key: "progress", icon: BarChart3, label: "Progress" },
+    { key: "motivation", icon: Heart, label: "Why" },
+  ];
+
+  return (
+    <div style={{ fontFamily: "system-ui", display: "flex", justifyContent: "center", padding: "0 4px", height: "100%" }}>
+      <style>{`
+        * { box-sizing: border-box; }
+        html, body, #root { margin: 0; height: 100%; overflow: hidden; }
+        .sf-page { height: 100%; }
+        .sf-scroll::-webkit-scrollbar { height: 6px; width: 6px; }
+        .sf-scroll::-webkit-scrollbar-thumb { background: ${t.line}; border-radius: 4px; }
+        input[type="date"], input[type="time"] { color-scheme: ${dark ? "dark" : "light"}; }
+        @media (max-width: 420px) {
+          .sf-navlabel { font-size: 9.5px !important; }
+          .sf-title { font-size: 18px !important; }
+        }
+      `}</style>
+      <div className="sf-page" style={{ width: "100%", maxWidth: 720, minWidth: 0, background: t.bg, color: t.ink, fontFamily: "'Iowan Old Style','Palatino Linotype',Georgia,serif", borderRadius: 20, overflow: "hidden", boxShadow: dark ? "0 20px 60px rgba(0,0,0,0.5)" : "0 20px 60px rgba(43,42,40,0.12)", position: "relative", display: "flex", flexDirection: "column" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 22px 8px", flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            <span className="sf-title" style={{ fontSize: 20, fontWeight: 600, letterSpacing: "0.02em" }}>Still</span>
+            <span style={{ fontSize: 12, color: t.sub, fontFamily: "system-ui", letterSpacing: "0.08em", textTransform: "uppercase" }}>focus</span>
+          </div>
+          <div style={{ display: "flex", gap: 4 }}>
+            <button onClick={() => setScreen("settings")} style={{ background: "none", border: "none", color: screen === "settings" ? t.moss : t.sub, cursor: "pointer", padding: 6, display: "flex" }} aria-label="Settings"><SettingsIcon size={17} /></button>
+            <button onClick={() => setDark((d) => !d)} style={{ background: "none", border: "none", color: t.sub, cursor: "pointer", padding: 6, display: "flex" }} aria-label="Toggle theme">{dark ? <Sun size={17} /> : <Moon size={17} />}</button>
+          </div>
+        </div>
+
+        <div className="sf-scroll" style={{ padding: "6px 22px 22px", fontFamily: "system-ui", flex: 1, minHeight: 0, overflow: "auto" }}>
+          {screen === "timer" && (
+            <TimerScreen t={t} modeKey={modeKey} switchMode={switchMode} phase={phase} running={running}
+              secondsLeft={secondsLeft} stopwatchSecs={stopwatchSecs} startPause={startPause} reset={reset}
+              R={R} CIRC={CIRC} progress={progress} tasks={tasks} newTask={newTask} setNewTask={setNewTask}
+              addTask={addTask} toggleTask={toggleTask} removeTask={removeTask} activeTaskId={activeTaskId} setActiveTaskId={setActiveTaskId} />
+          )}
+          {screen === "planner" && <PlannerScreen t={t} planner={planner} setPlanner={setPlanner} eisenhower={eisenhower} dayStartHour={dayStartHour} consistencyTasks={consistencyTasks} setConsistencyTasks={setConsistencyTasks} />}
+          {screen === "matrix" && <MatrixScreen t={t} eisenhower={eisenhower} setEisenhower={setEisenhower} />}
+          {screen === "progress" && (
+            <ProgressScreen t={t} sessions={sessions} totalToday={totalToday} totalAll={totalAll} streak={streak}
+              sessionCountToday={sessionCountToday} dailyGoalMinutes={dailyGoalMinutes} setDailyGoalMinutes={setDailyGoalMinutes} onLogTime={() => setShowLogModal(true)}
+              compareDates={compareDates} setCompareDates={setCompareDates} sleepSettings={sleepSettings} />
+          )}
+          {screen === "motivation" && <MotivationScreen t={t} whyText={whyText} setWhyText={setWhyText} motivationLog={motivationLog} setMotivationLog={setMotivationLog} challengesLog={challengesLog} setChallengesLog={setChallengesLog} />}
+          {screen === "settings" && (
+            <SettingsScreen t={t} customDurations={customDurations} setCustomDurations={setCustomDurations}
+              sessions={sessions} setSessions={setSessions} dailyGoalMinutes={dailyGoalMinutes} setDailyGoalMinutes={setDailyGoalMinutes}
+              themeName={themeName} setThemeName={setThemeName} dark={dark} sleepSettings={sleepSettings} setSleepSettings={setSleepSettings}
+              dayStartHour={dayStartHour} setDayStartHour={setDayStartHour} />
+          )}
+        </div>
+
+        <div style={{ display: "flex", borderTop: `1px solid ${t.line}`, fontFamily: "system-ui", flexShrink: 0, background: t.bg }}>
+          {NAV.map(({ key, icon: Icon, label }) => (
+            <button key={key} onClick={() => setScreen(key)} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "10px 2px 12px", background: "none", border: "none", cursor: "pointer", color: screen === key ? t.moss : t.sub, minWidth: 0 }}>
+              <Icon size={17} strokeWidth={screen === key ? 2.4 : 1.8} />
+              <span className="sf-navlabel" style={{ fontSize: 10.5, letterSpacing: "0.01em" }}>{label}</span>
+            </button>
+          ))}
+        </div>
+
+        {showLogModal && <LogTimeModal t={t} eisenhower={eisenhower} onClose={() => setShowLogModal(false)} onSave={addManualSession} />}
+      </div>
+    </div>
+  );
+}
