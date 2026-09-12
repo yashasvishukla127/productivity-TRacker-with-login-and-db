@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Timer as TimerIcon, BarChart3, Moon, Sun, CalendarDays, Grid2x2, Heart, Settings as SettingsIcon } from "lucide-react";
-import { MODES, THEMES } from "./theme";
+import { MODES, THEMES, TASK_COLORS } from "./theme";
 import { uid, fmt, todayKey, minutesSinceMidnight, addDays } from "./utils/dates";
 
 import TimerScreen from "./components/TimerScreen";
@@ -152,7 +152,7 @@ export default function FocusApp() {
         });
 
         resolved.completedWorkPhases.forEach((cwp) => {
-          logSession(cwp.minutes, active.modeKey, new Date(cwp.startTimestamp), "");
+          logSession(cwp.minutes, active.modeKey, new Date(cwp.startTimestamp), "", activeTaskId);
         });
 
         if (resolved.completedWorkPhases.length > 0 && activeTaskId) {
@@ -254,7 +254,7 @@ export default function FocusApp() {
           });
 
           resolved.completedWorkPhases.forEach((cwp) => {
-            logSession(cwp.minutes, modeKey, new Date(cwp.startTimestamp), "");
+            logSession(cwp.minutes, modeKey, new Date(cwp.startTimestamp), "", activeTaskId);
           });
 
           if (resolved.completedWorkPhases.length > 0 && activeTaskId) {
@@ -448,7 +448,7 @@ export default function FocusApp() {
     } catch (e) {}
   }
 
-  function logSession(minutes, mode, startDate, note) {
+  function logSession(minutes, mode, startDate, note, taskId) {
     if (minutes <= 0) return;
 
     const sd = startDate || new Date();
@@ -462,7 +462,8 @@ export default function FocusApp() {
         minutes,
         mode,
         manual: false,
-        note: note || ""
+        note: note || "",
+        taskId: taskId || null
       }
     ]);
   }
@@ -518,7 +519,8 @@ export default function FocusApp() {
         sessionStartRef.current
           ? new Date(sessionStartRef.current)
           : new Date(),
-        activeTask ? activeTask.text : ""
+        activeTask ? activeTask.text : "",
+        activeTask ? activeTask.id : null
       );
 
       if (activeTaskId) {
@@ -620,11 +622,12 @@ export default function FocusApp() {
             (tk) => tk.id === activeTaskId
           );
 
-          logSession(
+            logSession(
             Math.round(stopwatchSecs / 60),
             "stopwatch",
             new Date(sessionStartRef.current),
-            activeTask ? activeTask.text : ""
+            activeTask ? activeTask.text : "",
+            activeTask?.id
           );
         }
 
@@ -651,98 +654,132 @@ export default function FocusApp() {
     }
   }
 
-  function reset() {
-    setRunning(false);
-    clearInterval(intervalRef.current);
-    cancelSessionEnd(TIMER_NOTIFICATION_ID);
+function reset() {
+  setRunning(false);
+  clearInterval(intervalRef.current);
+  cancelSessionEnd(TIMER_NOTIFICATION_ID);
 
-    if (modeKey === "stopwatch") {
-      if (stopwatchSecs > 0) {
-        const activeTask = tasks.find((tk) => tk.id === activeTaskId);
-
-        logSession(
-          Math.round(stopwatchSecs / 60),
-          "stopwatch",
-          new Date(sessionStartRef.current),
-          activeTask ? activeTask.text : ""
-        );
-      }
-
-      setStopwatchSecs(0);
-      clearActiveTimer();
-    } else {
-      setPhase("work");
-      setSecondsLeft(customDurations[modeKey].work * 60);
-
-      saveActiveTimer({
-        modeKey,
-        phase: "work",
-        running: false,
-        endTimestamp: null,
-        remainingSeconds: customDurations[modeKey].work * 60,
-        stopwatchStartTimestamp: null,
-        stopwatchBaseSecs: 0
-      });
-    }
-  }
-
-  function stopSession() {
-    setRunning(false);
-    clearInterval(intervalRef.current);
-    cancelSessionEnd(TIMER_NOTIFICATION_ID);
-
-    if (modeKey === "stopwatch") {
-      if (stopwatchSecs > 0) {
-        const activeTask = tasks.find((tk) => tk.id === activeTaskId);
-
-        logSession(
-          Math.round(stopwatchSecs / 60),
-          "stopwatch",
-          new Date(sessionStartRef.current),
-          activeTask ? activeTask.text : ""
-        );
-      }
-
-      setStopwatchSecs(0);
-      clearActiveTimer();
-    } else {
-      const durs = customDurations[modeKey];
-      const totalSecs =
-        (phase === "work" ? durs.work : durs.rest) * 60;
-
-      const elapsedMinutes = Math.round(
-        (totalSecs - secondsLeft) / 60
+  if (modeKey === "stopwatch") {
+    if (stopwatchSecs > 0) {
+      const activeTask = tasks.find(
+        (tk) => tk.id === activeTaskId
       );
 
-      if (elapsedMinutes > 0 && phase === "work") {
-        const activeTask = tasks.find(
-          (tk) => tk.id === activeTaskId
-        );
+      logSession(
+        Math.round(stopwatchSecs / 60),
+        "stopwatch",
+        sessionStartRef.current
+          ? new Date(sessionStartRef.current)
+          : new Date(),
+        activeTask ? activeTask.text : "",
+        activeTask?.id
+      );
+    }
+
+    setStopwatchSecs(0);
+    clearActiveTimer();
+  } else {
+    const durs = customDurations[modeKey];
+
+    const totalSecs =
+      (phase === "work" ? durs.work : durs.rest) * 60;
+
+    const elapsedMinutes = Math.round(
+      (totalSecs - secondsLeft) / 60
+    );
+
+    // Log the partial work session BEFORE resetting the timer.
+    if (elapsedMinutes > 0 && phase === "work") {
+      const activeTask = tasks.find(
+        (tk) => tk.id === activeTaskId
+      );
+
+      logSession(
+        elapsedMinutes,
+        modeKey,
+        sessionStartRef.current
+          ? new Date(sessionStartRef.current)
+          : new Date(),
+        activeTask ? activeTask.text : "",
+        activeTask?.id
+      );
+    }
+
+    // Reset the timer only AFTER the partial session is logged.
+    setPhase("work");
+    setSecondsLeft(durs.work * 60);
+
+    saveActiveTimer({
+      modeKey,
+      phase: "work",
+      running: false,
+      endTimestamp: null,
+      remainingSeconds: durs.work * 60,
+      stopwatchStartTimestamp: null,
+      stopwatchBaseSecs: 0
+    });
+  }
+}
+
+function stopSession() {
+  setRunning(false);
+  clearInterval(intervalRef.current);
+  cancelSessionEnd(TIMER_NOTIFICATION_ID);
+
+  if (modeKey === "stopwatch") {
+    if (stopwatchSecs > 0) {
+      const activeTask = tasks.find((tk) => tk.id === activeTaskId);
 
         logSession(
-          elapsedMinutes,
-          modeKey,
-          sessionStartRef.current
-            ? new Date(sessionStartRef.current)
-            : new Date(),
-          activeTask ? activeTask.text : ""
-        );
-      }
-
-      setPhase("work");
-      setSecondsLeft(durs.work * 60);
-
-      saveActiveTimer({
-        modeKey,
-        phase: "work",
-        running: false,
-        endTimestamp: null,
-        remainingSeconds: durs.work * 60,
-        stopwatchStartTimestamp: null,
-        stopwatchBaseSecs: 0
-      });
+        Math.round(stopwatchSecs / 60),
+        "stopwatch",
+        new Date(sessionStartRef.current),
+        activeTask ? activeTask.text : "",
+        activeTask?.id
+      );
     }
+
+    setStopwatchSecs(0);
+    clearActiveTimer();
+  } else {
+    const durs = customDurations[modeKey];
+    const totalSecs =
+      (phase === "work" ? durs.work : durs.rest) * 60;
+
+    const elapsedMinutes = Math.round(
+      (totalSecs - secondsLeft) / 60
+    );
+
+    if (elapsedMinutes > 0 && phase === "work") {
+      const activeTask = tasks.find(
+        (tk) => tk.id === activeTaskId
+      );
+
+        logSession(
+        elapsedMinutes,
+        modeKey,
+        sessionStartRef.current
+          ? new Date(sessionStartRef.current)
+          : new Date(),
+        activeTask ? activeTask.text : "",
+        activeTask?.id
+      );
+    }
+
+    setPhase("work");
+    setSecondsLeft(durs.work * 60);
+
+    saveActiveTimer({
+      modeKey,
+      phase: "work",
+      running: false,
+      endTimestamp: null,
+      remainingSeconds: durs.work * 60,
+      stopwatchStartTimestamp: null,
+      stopwatchBaseSecs: 0
+    });
   }
+}
 
   function switchMode(key) {
     setRunning(false);
@@ -779,11 +816,21 @@ export default function FocusApp() {
       {
         id: uid(),
         text,
-        done: false
+        done: false,
+        color: TASK_COLORS[p.length % TASK_COLORS.length],
+        targetHours: null
       }
     ]);
 
     setNewTask("");
+  }
+
+  function setTaskTarget(id, hours) {
+    setTasks((p) =>
+      p.map((tk) =>
+        tk.id === id ? { ...tk, targetHours: hours } : tk
+      )
+    );
   }
 
   function toggleTask(id) {
@@ -836,18 +883,48 @@ export default function FocusApp() {
     setShowLogModal(false);
   }
 
-  const totalToday = sessions
-    .filter((s) => s.date === todayKey())
+ 
+ const today = todayKey();
+
+const totalToday = sessions
+  .filter((s) => s.date === today)
+  .reduce((a, s) => a + s.minutes, 0);
+
+const totalAll = sessions.reduce(
+  (a, s) => a + s.minutes,
+  0
+);
+
+const todayFocusedMinutes = totalToday;
+
+const todayMinutesByTaskId = tasks.reduce((acc, tk) => {
+  acc[tk.id] = sessions
+    .filter(
+      (s) =>
+        s.date === today &&
+        s.taskId === tk.id
+    )
     .reduce((a, s) => a + s.minutes, 0);
 
-  const totalAll = sessions.reduce(
-    (a, s) => a + s.minutes,
-    0
-  );
+  return acc;
+}, {});
+
+const durs = customDurations[modeKey];
+
+const inProgressMinutes =
+  modeKey === "stopwatch"
+    ? Math.round(stopwatchSecs / 60)
+    : phase === "work"
+      ? Math.round(
+          (durs.work * 60 - secondsLeft) / 60
+        )
+      : 0;
 
   const sessionCountToday = sessions.filter(
-    (s) => s.date === todayKey()
+    (s) => s.date === today
   ).length;
+
+
 
   function computeStreak() {
     let streak = 0;
@@ -1130,6 +1207,13 @@ export default function FocusApp() {
               removeTask={removeTask}
               activeTaskId={activeTaskId}
               setActiveTaskId={setActiveTaskId}
+              
+              setTaskTarget={setTaskTarget}
+              todayFocusedMinutes={todayFocusedMinutes}
+              todayMinutesByTaskId={todayMinutesByTaskId}
+              inProgressMinutes={inProgressMinutes}
+
+             
             />
           )}
 
@@ -1157,6 +1241,7 @@ export default function FocusApp() {
             <ProgressScreen
               t={t}
               sessions={sessions}
+              tasks={tasks}
               totalToday={totalToday}
               totalAll={totalAll}
               streak={streak}

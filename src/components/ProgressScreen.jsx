@@ -1,4 +1,3 @@
-
 import React, { useState } from "react";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from "recharts";
 import { Flame, Plus } from "lucide-react";
@@ -11,15 +10,40 @@ import CompareView from "./CompareView";
 
 const RANGE_DAYS = { "7d": 7, "1m": 30, "3m": 90, "6m": 180 };
 
-function buildRangeData(range, sessions) {
+function buildRangeData(range, sessions, tasks = []) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const n = RANGE_DAYS[range];
+  
   return Array.from({ length: n }, (_, i) => {
     const d = addDays(today, -(n - 1 - i));
     const key = todayKey(d);
-    const minutes = sessions.filter((s) => s.date === key).reduce((a, s) => a + s.minutes, 0);
     const label = range === "7d" ? dayLabel(key) : d.toLocaleDateString(undefined, { day: "2-digit", month: "short" });
-    return { label, minutes, dateStr: key };
+    
+    const daySessions = sessions.filter((s) => s.date === key);
+    
+    // Initialize task breakdown object with 0 for all active tasks & untagged sessions
+    const perTaskMinutes = { other: 0 };
+    tasks.forEach((tk) => {
+      perTaskMinutes[tk.id] = 0;
+    });
+
+    // Sum minutes grouped by taskId
+    daySessions.forEach((s) => {
+      if (s.taskId && perTaskMinutes[s.taskId] !== undefined) {
+        perTaskMinutes[s.taskId] += s.minutes;
+      } else {
+        perTaskMinutes.other += s.minutes;
+      }
+    });
+
+    const totalMinutes = daySessions.reduce((a, s) => a + s.minutes, 0);
+
+    return {
+      label,
+      dateStr: key,
+      minutes: totalMinutes,
+      ...perTaskMinutes
+    };
   });
 }
 
@@ -50,12 +74,26 @@ function computeRangeStats(range, sessions, dailyGoalMinutes) {
   return { totalDays: n, activeDays, gapDays: n - activeDays, goalHitDays };
 }
 
-export default function ProgressScreen({ t, sessions, totalToday, totalAll, streak, sessionCountToday, dailyGoalMinutes, setDailyGoalMinutes, onLogTime, compareDates, setCompareDates, sleepSettings }) {
+export default function ProgressScreen({
+  t,
+  sessions,
+  totalToday,
+  totalAll,
+  streak,
+  sessionCountToday,
+  dailyGoalMinutes,
+  setDailyGoalMinutes,
+  onLogTime,
+  compareDates,
+  setCompareDates,
+  sleepSettings,
+  tasks = []
+}) {
   const [tab, setTab] = useState("chart");
   const [range, setRange] = useState("7d");
   const [chartUnit, setChartUnit] = useState("hr"); // "hr" | "min"
 
-  const rangeData = buildRangeData(range, sessions);
+  const rangeData = buildRangeData(range, sessions, tasks);
   const rangeStats = computeRangeStats(range, sessions, dailyGoalMinutes);
   const tickInterval = tickIntervalFor(range);
   const barPxWidth = range === "7d" ? 40 : range === "1m" ? 14 : range === "3m" ? 6 : 3.4;
@@ -181,13 +219,6 @@ export default function ProgressScreen({ t, sessions, totalToday, totalAll, stre
                   data={rangeData}
                   margin={{ top: 4, right: 4, left: 0, bottom: 0 }}
                 >
-                  <defs>
-                    <linearGradient id="barGradMoss" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={t.moss} stopOpacity={1} />
-                      <stop offset="100%" stopColor={t.moss} stopOpacity={0.55} />
-                    </linearGradient>
-                  </defs>
-
                   <CartesianGrid
                     vertical={false}
                     stroke={t.line}
@@ -224,9 +255,22 @@ export default function ProgressScreen({ t, sessions, totalToday, totalAll, stre
                     ]}
                   />
 
+                  {/* Stacked bars for each task */}
+                  {tasks.map((task) => (
+                    <Bar
+                      key={task.id}
+                      dataKey={task.id}
+                      stackId="a"
+                      fill={task.color}
+                      maxBarSize={28}
+                    />
+                  ))}
+
+                  {/* Stacked bar for untagged / manual time */}
                   <Bar
-                    dataKey="minutes"
-                    fill="url(#barGradMoss)"
+                    dataKey="other"
+                    stackId="a"
+                    fill={t.sub}
                     radius={[3, 3, 0, 0]}
                     maxBarSize={28}
                   />
@@ -326,6 +370,7 @@ export default function ProgressScreen({ t, sessions, totalToday, totalAll, stre
           t={t}
           sessions={sessions}
           sleepSettings={sleepSettings}
+          tasks={tasks}
         />
       )}
 
@@ -349,4 +394,3 @@ export default function ProgressScreen({ t, sessions, totalToday, totalAll, stre
     </div>
   );
 }
-

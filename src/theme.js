@@ -29,3 +29,7 @@ export const THEMES = {
 };
 
 export const SLEEP_COLOR = "#D9A62B";
+
+export const TASK_COLORS = ["#7C9885", "#C97B63", "#6B8CAE", "#B8860B", "#9370DB",
+  "#5F9EA0", "#CD5C5C", "#4682B4"];
+ 
