@@ -1,7 +1,7 @@
 import React from "react";
 import { THEMES } from "../theme";
 
-export default function SettingsScreen({ t, customDurations, setCustomDurations, sessions, setSessions, dailyGoalMinutes, setDailyGoalMinutes, themeName, setThemeName, dark, sleepSettings, setSleepSettings, dayStartHour, setDayStartHour }) {
+export default function SettingsScreen({ t, customDurations, setCustomDurations, sessions, setSessions, dailyGoalMinutes, setDailyGoalMinutes, themeName, setThemeName, dark, sleepSettings, setSleepSettings, dayStartHour, setDayStartHour, autoContinue, setAutoContinue }) {
   function update(mode, field, val) { const n = Math.max(1, Math.min(180, Number(val) || 1)); setCustomDurations((prev) => ({ ...prev, [mode]: { ...prev[mode], [field]: n } })); }
   return (
     <div>
@@ -29,6 +29,16 @@ export default function SettingsScreen({ t, customDurations, setCustomDurations,
           </div>
         </div>
       ))}
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0", borderBottom: `1px solid ${t.line}`, marginTop: 6 }}>
+        <div>
+          <div style={{ fontSize: 13.5 }}>Auto-continue sessions</div>
+          <div style={{ fontSize: 11.5, color: t.sub, marginTop: 2, maxWidth: 260 }}>When a focus or break period ends, start the next one automatically with a sound instead of waiting for you to tap Start.</div>
+        </div>
+        <button onClick={() => setAutoContinue((v) => !v)} style={{ width: 42, height: 24, borderRadius: 999, border: "none", background: autoContinue ? t.moss : t.line, position: "relative", cursor: "pointer", flexShrink: 0, marginLeft: 12 }}>
+          <span style={{ position: "absolute", top: 2, left: autoContinue ? 20 : 2, width: 20, height: 20, borderRadius: "50%", background: t.bg, transition: "left .15s" }} />
+        </button>
+      </div>
 
       <div style={{ fontSize: 11, color: t.sub, textTransform: "uppercase", letterSpacing: "0.1em", margin: "20px 0 6px" }}>Planner day starts at</div>
       <div style={{ fontSize: 11.5, color: t.sub, marginBottom: 8 }}>Each Planner column runs 24 hours from this time instead of midnight — handy if your day starts late or you work past midnight.</div>

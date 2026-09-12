@@ -50,3 +50,49 @@ export function remainingFromEnd(endTimestamp) {
 export function elapsedStopwatch(startTimestamp, baseSecs) {
   return baseSecs + Math.floor((Date.now() - startTimestamp) / 1000);
 }
+
+// Auto-continue support: given a countdown phase whose end timestamp has
+// already passed (the app was backgrounded/closed through it, possibly
+// through several full work/rest cycles), walk forward cycle by cycle to
+// find where the timer *should* be right now, and collect every work
+// phase that fully completed along the way so the caller can log a
+// session for each one — this is what makes "started a pomodoro, put the
+// phone in my pocket for two hours" land on the correct phase with every
+// finished focus block already recorded, instead of just the one that
+// was in progress when the app was last open.
+//
+// durations: { work: minutes, rest: minutes } for the active mode.
+// Returns the resolved phase/endTimestamp to resume at (endTimestamp is
+// always in the future, or exactly now if the safety cap below is hit),
+// plus completedWorkPhases: [{ startTimestamp, minutes }].
+const MAX_AUTO_CYCLES = 500; // safety cap so a months-old stale timer can't loop forever
+
+export function resolveElapsedPhases({ phase, endTimestamp, durations }) {
+  const completedWorkPhases = [];
+  let currentPhase = phase;
+  let currentEnd = endTimestamp;
+  let cycles = 0;
+
+  while (Date.now() >= currentEnd && cycles < MAX_AUTO_CYCLES) {
+    if (currentPhase === "work") {
+      completedWorkPhases.push({
+        startTimestamp: currentEnd - durations.work * 60 * 1000,
+        minutes: durations.work,
+      });
+      currentPhase = "rest";
+      currentEnd = currentEnd + durations.rest * 60 * 1000;
+    } else {
+      currentPhase = "work";
+      currentEnd = currentEnd + durations.work * 60 * 1000;
+    }
+    cycles++;
+  }
+
+  return {
+    phase: currentPhase,
+    endTimestamp: currentEnd,
+    remainingSeconds: remainingFromEnd(currentEnd),
+    completedWorkPhases,
+    hitCap: cycles >= MAX_AUTO_CYCLES,
+  };
+}
