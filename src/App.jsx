@@ -10,6 +10,8 @@ import ProgressScreen from "./components/ProgressScreen";
 import MotivationScreen from "./components/MotivationScreen";
 import SettingsScreen from "./components/SettingsScreen";
 import LogTimeModal from "./components/LogTimeModal";
+import { saveActiveTimer, loadActiveTimer, clearActiveTimer, remainingFromEnd, elapsedStopwatch } from "./lib/timerEngine";
+import { initNotifications, scheduleSessionEnd, cancelSessionEnd, TIMER_NOTIFICATION_ID } from "./lib/notifications";
 
 const localStorageAdapter = {
   async get(key) {
@@ -95,7 +97,70 @@ export default function FocusApp() {
       } catch (e) { console.error("Load error", e); }
       finally { setLoaded(true); }
     })();
+    initNotifications();
   }, [storageApi]);
+
+  // Resume an in-progress timer after the app was backgrounded/killed and
+  // reopened, by recomputing from stored wall-clock timestamps instead of
+  // trusting a JS interval that Android may have frozen while backgrounded.
+  useEffect(() => {
+    if (!loaded) return;
+    const active = loadActiveTimer();
+    if (!active) return;
+
+    if (active.modeKey === "stopwatch") {
+      setModeKey("stopwatch");
+      if (active.running && active.stopwatchStartTimestamp) {
+        setStopwatchSecs(elapsedStopwatch(active.stopwatchStartTimestamp, active.stopwatchBaseSecs));
+        sessionStartRef.current = active.stopwatchStartTimestamp - active.stopwatchBaseSecs * 1000;
+        setRunning(true);
+      } else {
+        setStopwatchSecs(active.stopwatchBaseSecs || 0);
+      }
+      return;
+    }
+
+    setModeKey(active.modeKey);
+    setPhase(active.phase);
+    if (active.running && active.endTimestamp) {
+      const remaining = remainingFromEnd(active.endTimestamp);
+      if (remaining <= 0) {
+        // Phase finished while the app was closed/backgrounded — the
+        // scheduled notification already fired. Land on 0 and let the
+        // user hit Start/next phase themselves rather than silently
+        // fast-forwarding through session logging on their behalf.
+        setSecondsLeft(0);
+        setRunning(false);
+        clearActiveTimer();
+      } else {
+        setSecondsLeft(remaining);
+        setRunning(true);
+      }
+    } else if (active.remainingSeconds != null) {
+      setSecondsLeft(active.remainingSeconds);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded]);
+
+  // Re-sync from the stored end timestamp whenever the app/tab becomes
+  // visible again — covers the case where the WebView stayed alive but
+  // the OS throttled the setInterval while backgrounded.
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState !== "visible" || !running) return;
+      const active = loadActiveTimer();
+      if (!active) return;
+      if (active.modeKey === "stopwatch" && active.stopwatchStartTimestamp) {
+        setStopwatchSecs(elapsedStopwatch(active.stopwatchStartTimestamp, active.stopwatchBaseSecs));
+      } else if (active.endTimestamp) {
+        const remaining = remainingFromEnd(active.endTimestamp);
+        setSecondsLeft(Math.max(0, remaining));
+        if (remaining <= 0) handlePhaseEnd();
+      }
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  });
 
   const persist = useCallback((key, value) => {
     clearTimeout(saveTimeout.current[key]);
@@ -152,42 +217,78 @@ export default function FocusApp() {
     beep();
     clearInterval(intervalRef.current);
     setRunning(false);
+    cancelSessionEnd(TIMER_NOTIFICATION_ID);
     const durs = customDurations[modeKey];
     const activeTask = tasks.find((tk) => tk.id === activeTaskId);
     if (phase === "work") {
       logSession(durs.work, modeKey, sessionStartRef.current ? new Date(sessionStartRef.current) : new Date(), activeTask ? activeTask.text : "");
       setPhase("rest");
       setSecondsLeft(durs.rest * 60);
+      saveActiveTimer({ modeKey, phase: "rest", running: false, endTimestamp: null, remainingSeconds: durs.rest * 60, stopwatchStartTimestamp: null, stopwatchBaseSecs: 0 });
       if (activeTaskId) setTasks((prev) => prev.map((tk) => (tk.id === activeTaskId ? { ...tk, done: true } : tk)));
-    } else { setPhase("work"); setSecondsLeft(durs.work * 60); }
+    } else {
+      setPhase("work"); setSecondsLeft(durs.work * 60);
+      saveActiveTimer({ modeKey, phase: "work", running: false, endTimestamp: null, remainingSeconds: durs.work * 60, stopwatchStartTimestamp: null, stopwatchBaseSecs: 0 });
+    }
   }
 
   function startPause() {
-    if (!running) { sessionStartRef.current = Date.now(); setRunning(true); }
-    else {
+    if (!running) {
+      sessionStartRef.current = Date.now();
+      setRunning(true);
+      if (modeKey === "stopwatch") {
+        saveActiveTimer({ modeKey, phase, running: true, endTimestamp: null, remainingSeconds: null, stopwatchStartTimestamp: Date.now(), stopwatchBaseSecs: stopwatchSecs });
+      } else {
+        const endTimestamp = Date.now() + secondsLeft * 1000;
+        saveActiveTimer({ modeKey, phase, running: true, endTimestamp, remainingSeconds: null, stopwatchStartTimestamp: null, stopwatchBaseSecs: 0 });
+        scheduleSessionEnd(
+          TIMER_NOTIFICATION_ID,
+          new Date(endTimestamp),
+          phase === "work" ? "Focus session complete" : "Break's over",
+          phase === "work" ? "Nice work — time for a break." : "Ready to get back to it?"
+        );
+      }
+    } else {
       setRunning(false); clearInterval(intervalRef.current);
-      if (modeKey === "stopwatch" && stopwatchSecs > 0) {
-        const activeTask = tasks.find((tk) => tk.id === activeTaskId);
-        logSession(Math.round(stopwatchSecs / 60), "stopwatch", new Date(sessionStartRef.current), activeTask ? activeTask.text : "");
+      cancelSessionEnd(TIMER_NOTIFICATION_ID);
+      if (modeKey === "stopwatch") {
+        if (stopwatchSecs > 0) {
+          const activeTask = tasks.find((tk) => tk.id === activeTaskId);
+          logSession(Math.round(stopwatchSecs / 60), "stopwatch", new Date(sessionStartRef.current), activeTask ? activeTask.text : "");
+        }
+        saveActiveTimer({ modeKey, phase, running: false, endTimestamp: null, remainingSeconds: null, stopwatchStartTimestamp: null, stopwatchBaseSecs: stopwatchSecs });
+      } else {
+        saveActiveTimer({ modeKey, phase, running: false, endTimestamp: null, remainingSeconds: secondsLeft, stopwatchStartTimestamp: null, stopwatchBaseSecs: 0 });
       }
     }
   }
 
   function reset() {
     setRunning(false); clearInterval(intervalRef.current);
+    cancelSessionEnd(TIMER_NOTIFICATION_ID);
     if (modeKey === "stopwatch") {
       if (stopwatchSecs > 0) {
         const activeTask = tasks.find((tk) => tk.id === activeTaskId);
         logSession(Math.round(stopwatchSecs / 60), "stopwatch", new Date(sessionStartRef.current), activeTask ? activeTask.text : "");
       }
       setStopwatchSecs(0);
-    } else { setPhase("work"); setSecondsLeft(customDurations[modeKey].work * 60); }
+      clearActiveTimer();
+    } else {
+      setPhase("work"); setSecondsLeft(customDurations[modeKey].work * 60);
+      saveActiveTimer({ modeKey, phase: "work", running: false, endTimestamp: null, remainingSeconds: customDurations[modeKey].work * 60, stopwatchStartTimestamp: null, stopwatchBaseSecs: 0 });
+    }
   }
 
   function switchMode(key) {
     setRunning(false); clearInterval(intervalRef.current);
+    cancelSessionEnd(TIMER_NOTIFICATION_ID);
     setModeKey(key); setPhase("work"); setStopwatchSecs(0);
-    if (key !== "stopwatch") setSecondsLeft(customDurations[key].work * 60);
+    if (key !== "stopwatch") {
+      setSecondsLeft(customDurations[key].work * 60);
+      saveActiveTimer({ modeKey: key, phase: "work", running: false, endTimestamp: null, remainingSeconds: customDurations[key].work * 60, stopwatchStartTimestamp: null, stopwatchBaseSecs: 0 });
+    } else {
+      clearActiveTimer();
+    }
   }
 
   function addTask() { const text = newTask.trim(); if (!text) return; setTasks((p) => [...p, { id: uid(), text, done: false }]); setNewTask(""); }

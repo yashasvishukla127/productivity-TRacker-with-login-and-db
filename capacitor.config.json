@@ -1,0 +1,8 @@
+{
+  "appId": "com.stillfocus.app",
+  "appName": "Still Focus",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": false
+  }
+}
