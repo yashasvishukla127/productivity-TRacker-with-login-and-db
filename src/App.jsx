@@ -14,6 +14,7 @@ import SettingsScreen from "./components/SettingsScreen";
 import LogTimeModal from "./components/LogTimeModal";
 import { saveActiveTimer, loadActiveTimer, clearActiveTimer, remainingFromEnd, elapsedStopwatch, resolveElapsedPhases } from "./lib/timerEngine";
 import { initNotifications, scheduleSessionEnd, cancelSessionEnd, TIMER_NOTIFICATION_ID } from "./lib/notifications";
+import { getQueuedWrites, clearQueuedWrite } from "./lib/offlineQueue";
 
 const localStorageAdapter = {
   async get(key) {
@@ -72,8 +73,14 @@ export default function FocusApp() {
   const intervalRef = useRef(null);
   const sessionStartRef = useRef(null);
   const saveTimeout = useRef({});
+  const stoppingRef = useRef(false);
 
   const storageApi = typeof window !== "undefined" && window.storage ? window.storage : localStorageAdapter;
+  const deviceId = localStorage.getItem("deviceId") || (() => {
+    const id = uid();
+    localStorage.setItem("deviceId", id); return id;
+  })();
+
 
   const flushQueuedWrites = useCallback(async () => {
     const pending = getQueuedWrites();
@@ -117,21 +124,21 @@ export default function FocusApp() {
         if (ac.status === "fulfilled" && ac.value) setAutoContinue(JSON.parse(ac.value.value));
         if (wes.status === "fulfilled" && wes.value) setWorkEndSoundId(JSON.parse(wes.value.value));
         if (bes.status === "fulfilled" && bes.value) setBreakEndSoundId(JSON.parse(bes.value.value));
-        } catch (e) {
+      } catch (e) {
         console.error("Load error", e);
-        } finally {
-          setLoaded(true);
-          flushQueuedWrites();
-          }
-        })();
+      } finally {
+        setLoaded(true);
+        flushQueuedWrites();
+      }
+    })();
 
     initNotifications();
-  }, [storageApi]);
+  }, [storageApi, flushQueuedWrites]);
 
   useEffect(() => {
     window.addEventListener("online", flushQueuedWrites);
     return () => window.removeEventListener("online", flushQueuedWrites);
-  }, [storageApi]);
+  }, [storageApi, flushQueuedWrites]);
 
   // Resume an in-progress timer after the app was backgrounded/killed and
   // reopened, by recomputing from stored wall-clock timestamps instead of
@@ -163,12 +170,6 @@ export default function FocusApp() {
       const remaining = remainingFromEnd(active.endTimestamp);
 
       if (remaining <= 0) {
-        // One or more phases finished while the app was closed/backgrounded
-        // — the scheduled local notification(s) already alerted the user.
-        // Walk forward through however many work/rest cycles fully elapsed,
-        // log a session for each completed work phase, and land the timer
-        // running in whichever phase it should be in right now, instead of
-        // stopping and waiting for the user to tap Start again.
         const durs = customDurations[active.modeKey];
         const resolved = resolveElapsedPhases({
           phase: active.phase,
@@ -191,8 +192,6 @@ export default function FocusApp() {
         setPhase(resolved.phase);
 
         if (!autoContinue || resolved.hitCap) {
-          // Auto-continue is off (or we hit the safety cap on a very stale
-          // timer) — settle into the current phase at full duration, paused.
           const fullSecs = (resolved.phase === "work" ? durs.work : durs.rest) * 60;
 
           setSecondsLeft(fullSecs);
@@ -244,9 +243,7 @@ export default function FocusApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded]);
 
-  // Re-sync from the stored end timestamp whenever the app/tab becomes
-  // visible again — covers the case where the WebView stayed alive but
-  // the OS throttled the setInterval while backgrounded.
+  // Re-sync from the stored end timestamp whenever the app/tab becomes visible again
   useEffect(() => {
     function onVisible() {
       if (document.visibilityState !== "visible" || !running) return;
@@ -265,12 +262,6 @@ export default function FocusApp() {
         const remaining = remainingFromEnd(active.endTimestamp);
 
         if (remaining <= 0) {
-          // The WebView stayed alive but the OS throttled the interval, so
-          // more than one phase (maybe several full cycles) could have
-          // elapsed while the tab was backgrounded — same catch-up logic
-          // as the app-launch case, and it also covers the common single-
-          // phase case (which is what beeps and hands off to handlePhaseEnd
-          // did before).
           const durs = customDurations[modeKey];
 
           const resolved = resolveElapsedPhases({
@@ -356,7 +347,7 @@ export default function FocusApp() {
     return () => document.removeEventListener("visibilitychange", onVisible);
   });
 
-    const persist = useCallback(
+  const persist = useCallback(
     (key, value) => {
       clearTimeout(saveTimeout.current[key]);
 
@@ -438,13 +429,12 @@ export default function FocusApp() {
   }, [autoContinue, loaded, persist]);
 
   useEffect(() => {
-  if (loaded) persist("workEndSoundId", workEndSoundId);
+    if (loaded) persist("workEndSoundId", workEndSoundId);
   }, [workEndSoundId, loaded, persist]);
 
   useEffect(() => {
     if (loaded) persist("breakEndSoundId", breakEndSoundId);
   }, [breakEndSoundId, loaded, persist]);
-
 
   useEffect(() => {
     if (!running) return;
@@ -465,18 +455,15 @@ export default function FocusApp() {
     }, 1000);
 
     return () => clearInterval(intervalRef.current);
-  }, [running, modeKey , phase]);
+  }, [running, modeKey, phase]);
 
- 
   function beep(justFinishedPhase) {
-  playSound(
-    justFinishedPhase === "work"
-      ? workEndSoundId
-      : breakEndSoundId
-  );
-  } 
-
-
+    playSound(
+      justFinishedPhase === "work"
+        ? workEndSoundId
+        : breakEndSoundId
+    );
+  }
 
   function logSession(minutes, mode, startDate, note, taskId) {
     if (minutes <= 0) return;
@@ -498,9 +485,6 @@ export default function FocusApp() {
     ]);
   }
 
-  // Starts the next phase running immediately — used by handlePhaseEnd
-  // when auto-continue is on, so work and rest chain into each other
-  // without the user having to tap Start each time.
   function startPhaseAuto(nextPhase, forModeKey, durs) {
     const durationMinutes =
       nextPhase === "work" ? durs.work : durs.rest;
@@ -524,72 +508,238 @@ export default function FocusApp() {
     });
 
     scheduleSessionEnd(
-        TIMER_NOTIFICATION_ID,
-        new Date(endTimestamp),
-        nextPhase === "work"
-          ? "Break's over"
-          : "Focus session complete",
-        nextPhase === "work"
-          ? "Back to work."
-          : "Nice work — time for a break.",
-        nextPhase === "work"
-          ? workEndSoundId
-          : breakEndSoundId
-      );
+      TIMER_NOTIFICATION_ID,
+      new Date(endTimestamp),
+      nextPhase === "work"
+        ? "Break's over"
+        : "Focus session complete",
+      nextPhase === "work"
+        ? "Back to work."
+        : "Nice work — time for a break.",
+      nextPhase === "work"
+        ? workEndSoundId
+        : breakEndSoundId
+    );
   }
 
-function handlePhaseEnd() {
-  beep(phase);
-  clearInterval(intervalRef.current);
+  function handlePhaseEnd() {
+    beep(phase);
+    clearInterval(intervalRef.current);
 
-  const durs = customDurations[modeKey];
-  const activeTask = tasks.find((tk) => tk.id === activeTaskId);
+    const durs = customDurations[modeKey];
+    const activeTask = tasks.find((tk) => tk.id === activeTaskId);
 
-  if (phase === "work") {
-    logSession(
-      durs.work,
-      modeKey,
-      sessionStartRef.current
-        ? new Date(sessionStartRef.current)
-        : new Date(),
-      activeTask ? activeTask.text : "",
-      activeTask ? activeTask.id : null
-    );
-
-    if (activeTaskId) {
-      setTasks((prev) =>
-        prev.map((tk) =>
-          tk.id === activeTaskId ? { ...tk, done: true } : tk
-        )
-      );
-    }
-
-    if (autoContinue) {
-      startPhaseAuto("rest", modeKey, durs);
-    } else {
-      setRunning(false);
-      disableBackgroundMode();
-      cancelSessionEnd(TIMER_NOTIFICATION_ID);
-      setPhase("rest");
-      setSecondsLeft(durs.rest * 60);
-
-      saveActiveTimer({
+    if (phase === "work") {
+      logSession(
+        durs.work,
         modeKey,
-        phase: "rest",
-        running: false,
-        endTimestamp: null,
-        remainingSeconds: durs.rest * 60,
-        stopwatchStartTimestamp: null,
-        stopwatchBaseSecs: 0
-      });
+        sessionStartRef.current
+          ? new Date(sessionStartRef.current)
+          : new Date(),
+        activeTask ? activeTask.text : "",
+        activeTask ? activeTask.id : null
+      );
+
+      if (activeTaskId) {
+        setTasks((prev) =>
+          prev.map((tk) =>
+            tk.id === activeTaskId ? { ...tk, done: true } : tk
+          )
+        );
+      }
+
+      if (autoContinue) {
+        startPhaseAuto("rest", modeKey, durs);
+      } else {
+        setRunning(false);
+        disableBackgroundMode();
+        cancelSessionEnd(TIMER_NOTIFICATION_ID);
+        setPhase("rest");
+        setSecondsLeft(durs.rest * 60);
+
+        saveActiveTimer({
+          modeKey,
+          phase: "rest",
+          running: false,
+          endTimestamp: null,
+          remainingSeconds: durs.rest * 60,
+          stopwatchStartTimestamp: null,
+          stopwatchBaseSecs: 0
+        });
+      }
+    } else {
+      if (autoContinue) {
+        startPhaseAuto("work", modeKey, durs);
+      } else {
+        setRunning(false);
+        disableBackgroundMode();
+        cancelSessionEnd(TIMER_NOTIFICATION_ID);
+        setPhase("work");
+        setSecondsLeft(durs.work * 60);
+
+        saveActiveTimer({
+          modeKey,
+          phase: "work",
+          running: false,
+          endTimestamp: null,
+          remainingSeconds: durs.work * 60,
+          stopwatchStartTimestamp: null,
+          stopwatchBaseSecs: 0
+        });
+      }
     }
-  } else {
-    if (autoContinue) {
-      startPhaseAuto("work", modeKey, durs);
+  }
+
+  async function startPause() {
+    if (!running) {
+      const lockRaw = await storageApi.get("activeLock", false);
+      const lock = lockRaw ? JSON.parse(lockRaw.value) : null;
+      if (lock && lock.deviceId !== deviceId && Date.now() - lock.startedAt < 3 * 60 * 60 * 1000) {
+        const proceed = window.confirm("A timer looks like it's already running on another device. Start here anyway?");
+        if (!proceed) return;
+      }
+      await storageApi.set("activeLock", JSON.stringify({ deviceId, startedAt: Date.now(), modeKey, activeTaskId }), false);
+
+      sessionStartRef.current = Date.now();
+      setRunning(true);
+      enableBackgroundMode();
+
+      if (modeKey === "stopwatch") {
+        saveActiveTimer({
+          modeKey,
+          phase,
+          running: true,
+          endTimestamp: null,
+          remainingSeconds: null,
+          stopwatchStartTimestamp: Date.now(),
+          stopwatchBaseSecs: stopwatchSecs
+        });
+      } else {
+        const endTimestamp =
+          Date.now() + secondsLeft * 1000;
+
+        saveActiveTimer({
+          modeKey,
+          phase,
+          running: true,
+          endTimestamp,
+          remainingSeconds: null,
+          stopwatchStartTimestamp: null,
+          stopwatchBaseSecs: 0
+        });
+
+        scheduleSessionEnd(
+          TIMER_NOTIFICATION_ID,
+          new Date(endTimestamp),
+          phase === "work"
+            ? "Focus session complete"
+            : "Break's over",
+          phase === "work"
+            ? "Nice work — time for a break."
+            : "Ready to get back to it?",
+          phase === "work"
+            ? workEndSoundId
+            : breakEndSoundId
+        );
+      }
     } else {
       setRunning(false);
       disableBackgroundMode();
+      clearInterval(intervalRef.current);
       cancelSessionEnd(TIMER_NOTIFICATION_ID);
+
+      if (modeKey === "stopwatch") {
+        if (stopwatchSecs > 0) {
+          const activeTask = tasks.find(
+            (tk) => tk.id === activeTaskId
+          );
+
+          logSession(
+            Math.round(stopwatchSecs / 60),
+            "stopwatch",
+            new Date(sessionStartRef.current),
+            activeTask ? activeTask.text : "",
+            activeTask?.id
+          );
+        }
+
+        saveActiveTimer({
+          modeKey,
+          phase,
+          running: false,
+          endTimestamp: null,
+          remainingSeconds: null,
+          stopwatchStartTimestamp: null,
+          stopwatchBaseSecs: stopwatchSecs
+        });
+      } else {
+        saveActiveTimer({
+          modeKey,
+          phase,
+          running: false,
+          endTimestamp: null,
+          remainingSeconds: secondsLeft,
+          stopwatchStartTimestamp: null,
+          stopwatchBaseSecs: 0
+        });
+      }
+    }
+  }
+
+  function reset() {
+    if (stoppingRef.current) return;
+    stoppingRef.current = true;
+    setTimeout(() => { stoppingRef.current = false; }, 500);
+    setRunning(false);
+    clearInterval(intervalRef.current);
+    cancelSessionEnd(TIMER_NOTIFICATION_ID);
+    storageApi.set("activeLock", JSON.stringify(null), false);
+
+    if (modeKey === "stopwatch") {
+      if (stopwatchSecs > 0) {
+        const activeTask = tasks.find(
+          (tk) => tk.id === activeTaskId
+        );
+
+        logSession(
+          Math.round(stopwatchSecs / 60),
+          "stopwatch",
+          sessionStartRef.current
+            ? new Date(sessionStartRef.current)
+            : new Date(),
+          activeTask ? activeTask.text : "",
+          activeTask?.id
+        );
+      }
+
+      setStopwatchSecs(0);
+      clearActiveTimer();
+    } else {
+      const durs = customDurations[modeKey];
+
+      const totalSecs =
+        (phase === "work" ? durs.work : durs.rest) * 60;
+
+      const elapsedMinutes = Math.round(
+        (totalSecs - secondsLeft) / 60
+      );
+
+      if (elapsedMinutes > 0 && phase === "work") {
+        const activeTask = tasks.find(
+          (tk) => tk.id === activeTaskId
+        );
+
+        logSession(
+          elapsedMinutes,
+          modeKey,
+          sessionStartRef.current
+            ? new Date(sessionStartRef.current)
+            : new Date(),
+          activeTask ? activeTask.text : "",
+          activeTask?.id
+        );
+      }
+
       setPhase("work");
       setSecondsLeft(durs.work * 60);
 
@@ -604,69 +754,19 @@ function handlePhaseEnd() {
       });
     }
   }
-}
 
-
-
-
-
-
-
-function startPause() {
-  if (!running) {
-    sessionStartRef.current = Date.now();
-    setRunning(true);
-    enableBackgroundMode();
-
-    if (modeKey === "stopwatch") {
-      saveActiveTimer({
-        modeKey,
-        phase,
-        running: true,
-        endTimestamp: null,
-        remainingSeconds: null,
-        stopwatchStartTimestamp: Date.now(),
-        stopwatchBaseSecs: stopwatchSecs
-      });
-    } else {
-      const endTimestamp =
-        Date.now() + secondsLeft * 1000;
-
-      saveActiveTimer({
-        modeKey,
-        phase,
-        running: true,
-        endTimestamp,
-        remainingSeconds: null,
-        stopwatchStartTimestamp: null,
-        stopwatchBaseSecs: 0
-      });
-
-      scheduleSessionEnd(
-        TIMER_NOTIFICATION_ID,
-        new Date(endTimestamp),
-        phase === "work"
-          ? "Focus session complete"
-          : "Break's over",
-        phase === "work"
-          ? "Nice work — time for a break."
-          : "Ready to get back to it?",
-        phase === "work"
-          ? workEndSoundId
-          : breakEndSoundId
-      );
-    }
-  } else {
+  function stopSession() {
+    if (stoppingRef.current) return;
+    stoppingRef.current = true;
+    setTimeout(() => { stoppingRef.current = false; }, 500);
     setRunning(false);
-    disableBackgroundMode();
     clearInterval(intervalRef.current);
     cancelSessionEnd(TIMER_NOTIFICATION_ID);
+    storageApi.set("activeLock", JSON.stringify(null), false);
 
     if (modeKey === "stopwatch") {
       if (stopwatchSecs > 0) {
-        const activeTask = tasks.find(
-          (tk) => tk.id === activeTaskId
-        );
+        const activeTask = tasks.find((tk) => tk.id === activeTaskId);
 
         logSession(
           Math.round(stopwatchSecs / 60),
@@ -677,167 +777,47 @@ function startPause() {
         );
       }
 
-      saveActiveTimer({
-        modeKey,
-        phase,
-        running: false,
-        endTimestamp: null,
-        remainingSeconds: null,
-        stopwatchStartTimestamp: null,
-        stopwatchBaseSecs: stopwatchSecs
-      });
+      setStopwatchSecs(0);
+      clearActiveTimer();
     } else {
+      const durs = customDurations[modeKey];
+      const totalSecs =
+        (phase === "work" ? durs.work : durs.rest) * 60;
+
+      const elapsedMinutes = Math.round(
+        (totalSecs - secondsLeft) / 60
+      );
+
+      if (elapsedMinutes > 0 && phase === "work") {
+        const activeTask = tasks.find(
+          (tk) => tk.id === activeTaskId
+        );
+
+        logSession(
+          elapsedMinutes,
+          modeKey,
+          sessionStartRef.current
+            ? new Date(sessionStartRef.current)
+            : new Date(),
+          activeTask ? activeTask.text : "",
+          activeTask?.id
+        );
+      }
+
+      setPhase("work");
+      setSecondsLeft(durs.work * 60);
+
       saveActiveTimer({
         modeKey,
-        phase,
+        phase: "work",
         running: false,
         endTimestamp: null,
-        remainingSeconds: secondsLeft,
+        remainingSeconds: durs.work * 60,
         stopwatchStartTimestamp: null,
         stopwatchBaseSecs: 0
       });
     }
   }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-function reset() {
-  setRunning(false);
-  clearInterval(intervalRef.current);
-  cancelSessionEnd(TIMER_NOTIFICATION_ID);
-
-  if (modeKey === "stopwatch") {
-    if (stopwatchSecs > 0) {
-      const activeTask = tasks.find(
-        (tk) => tk.id === activeTaskId
-      );
-
-      logSession(
-        Math.round(stopwatchSecs / 60),
-        "stopwatch",
-        sessionStartRef.current
-          ? new Date(sessionStartRef.current)
-          : new Date(),
-        activeTask ? activeTask.text : "",
-        activeTask?.id
-      );
-    }
-
-    setStopwatchSecs(0);
-    clearActiveTimer();
-  } else {
-    const durs = customDurations[modeKey];
-
-    const totalSecs =
-      (phase === "work" ? durs.work : durs.rest) * 60;
-
-    const elapsedMinutes = Math.round(
-      (totalSecs - secondsLeft) / 60
-    );
-
-    // Log the partial work session BEFORE resetting the timer.
-    if (elapsedMinutes > 0 && phase === "work") {
-      const activeTask = tasks.find(
-        (tk) => tk.id === activeTaskId
-      );
-
-      logSession(
-        elapsedMinutes,
-        modeKey,
-        sessionStartRef.current
-          ? new Date(sessionStartRef.current)
-          : new Date(),
-        activeTask ? activeTask.text : "",
-        activeTask?.id
-      );
-    }
-
-    // Reset the timer only AFTER the partial session is logged.
-    setPhase("work");
-    setSecondsLeft(durs.work * 60);
-
-    saveActiveTimer({
-      modeKey,
-      phase: "work",
-      running: false,
-      endTimestamp: null,
-      remainingSeconds: durs.work * 60,
-      stopwatchStartTimestamp: null,
-      stopwatchBaseSecs: 0
-    });
-  }
-}
-
-function stopSession() {
-  setRunning(false);
-  clearInterval(intervalRef.current);
-  cancelSessionEnd(TIMER_NOTIFICATION_ID);
-
-  if (modeKey === "stopwatch") {
-    if (stopwatchSecs > 0) {
-      const activeTask = tasks.find((tk) => tk.id === activeTaskId);
-
-        logSession(
-        Math.round(stopwatchSecs / 60),
-        "stopwatch",
-        new Date(sessionStartRef.current),
-        activeTask ? activeTask.text : "",
-        activeTask?.id
-      );
-    }
-
-    setStopwatchSecs(0);
-    clearActiveTimer();
-  } else {
-    const durs = customDurations[modeKey];
-    const totalSecs =
-      (phase === "work" ? durs.work : durs.rest) * 60;
-
-    const elapsedMinutes = Math.round(
-      (totalSecs - secondsLeft) / 60
-    );
-
-    if (elapsedMinutes > 0 && phase === "work") {
-      const activeTask = tasks.find(
-        (tk) => tk.id === activeTaskId
-      );
-
-        logSession(
-        elapsedMinutes,
-        modeKey,
-        sessionStartRef.current
-          ? new Date(sessionStartRef.current)
-          : new Date(),
-        activeTask ? activeTask.text : "",
-        activeTask?.id
-      );
-    }
-
-    setPhase("work");
-    setSecondsLeft(durs.work * 60);
-
-    saveActiveTimer({
-      modeKey,
-      phase: "work",
-      running: false,
-      endTimestamp: null,
-      remainingSeconds: durs.work * 60,
-      stopwatchStartTimestamp: null,
-      stopwatchBaseSecs: 0
-    });
-  }
-}
 
   function switchMode(key) {
     setRunning(false);
@@ -941,48 +921,45 @@ function stopSession() {
     setShowLogModal(false);
   }
 
- 
- const today = todayKey();
+  const today = todayKey();
 
-const totalToday = sessions
-  .filter((s) => s.date === today)
-  .reduce((a, s) => a + s.minutes, 0);
-
-const totalAll = sessions.reduce(
-  (a, s) => a + s.minutes,
-  0
-);
-
-const todayFocusedMinutes = totalToday;
-
-const todayMinutesByTaskId = tasks.reduce((acc, tk) => {
-  acc[tk.id] = sessions
-    .filter(
-      (s) =>
-        s.date === today &&
-        s.taskId === tk.id
-    )
+  const totalToday = sessions
+    .filter((s) => s.date === today)
     .reduce((a, s) => a + s.minutes, 0);
 
-  return acc;
-}, {});
+  const totalAll = sessions.reduce(
+    (a, s) => a + s.minutes,
+    0
+  );
 
-const durs = customDurations[modeKey];
+  const todayFocusedMinutes = totalToday;
 
-const inProgressMinutes =
-  modeKey === "stopwatch"
-    ? Math.round(stopwatchSecs / 60)
-    : phase === "work"
-      ? Math.round(
-          (durs.work * 60 - secondsLeft) / 60
-        )
-      : 0;
+  const todayMinutesByTaskId = tasks.reduce((acc, tk) => {
+    acc[tk.id] = sessions
+      .filter(
+        (s) =>
+          s.date === today &&
+          s.taskId === tk.id
+      )
+      .reduce((a, s) => a + s.minutes, 0);
+
+    return acc;
+  }, {});
+
+  const durs = customDurations[modeKey];
+
+  const inProgressMinutes =
+    modeKey === "stopwatch"
+      ? Math.round(stopwatchSecs / 60)
+      : phase === "work"
+        ? Math.round(
+            (durs.work * 60 - secondsLeft) / 60
+          )
+        : 0;
 
   const sessionCountToday = sessions.filter(
     (s) => s.date === today
   ).length;
-
-
 
   function computeStreak() {
     let streak = 0;
@@ -1246,6 +1223,7 @@ const inProgressMinutes =
             <TimerScreen
               t={t}
               modeKey={modeKey}
+              customDurations={customDurations} 
               switchMode={switchMode}
               phase={phase}
               running={running}
@@ -1265,13 +1243,10 @@ const inProgressMinutes =
               removeTask={removeTask}
               activeTaskId={activeTaskId}
               setActiveTaskId={setActiveTaskId}
-              
               setTaskTarget={setTaskTarget}
               todayFocusedMinutes={todayFocusedMinutes}
               todayMinutesByTaskId={todayMinutesByTaskId}
               inProgressMinutes={inProgressMinutes}
-
-             
             />
           )}
 
@@ -1360,47 +1335,40 @@ const inProgressMinutes =
             background: t.bg
           }}
         >
-          {NAV.map(
-            ({ key, icon: Icon, label }) => (
-              <button
-                key={key}
-                onClick={() => setScreen(key)}
+          {NAV.map(({ key, icon: Icon, label }) => (
+            <button
+              key={key}
+              onClick={() => setScreen(key)}
+              style={{
+                flex: 1,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 3,
+                padding: "10px 2px 12px",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                color: screen === key ? t.moss : t.sub,
+                minWidth: 0
+              }}
+            >
+              <Icon
+                size={17}
+                strokeWidth={screen === key ? 2.4 : 1.8}
+              />
+
+              <span
+                className="sf-navlabel"
                 style={{
-                  flex: 1,
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  gap: 3,
-                  padding: "10px 2px 12px",
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                  color:
-                    screen === key
-                      ? t.moss
-                      : t.sub,
-                  minWidth: 0
+                  fontSize: 10.5,
+                  letterSpacing: "0.01em"
                 }}
               >
-                <Icon
-                  size={17}
-                  strokeWidth={
-                    screen === key ? 2.4 : 1.8
-                  }
-                />
-
-                <span
-                  className="sf-navlabel"
-                  style={{
-                    fontSize: 10.5,
-                    letterSpacing: "0.01em"
-                  }}
-                >
-                  {label}
-                </span>
-              </button>
-            )
-          )}
+                {label}
+              </span>
+            </button>
+          ))}
         </div>
 
         {showLogModal && (

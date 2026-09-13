@@ -4,32 +4,33 @@ import { MODES } from "../theme";
 import { fmt } from "../utils/dates";
 
 export default function TimerScreen({
-  t,
-  modeKey,
-  switchMode,
-  phase,
-  running,
-  secondsLeft,
-  stopwatchSecs,
-  startPause,
-  reset,
-  stopSession,
-  R,
-  CIRC,
-  progress,
-  tasks,
-  newTask,
-  setNewTask,
-  addTask,
-  toggleTask,
-  removeTask,
-  activeTaskId,
-  setActiveTaskId,
-  setTaskTarget,
-  todayFocusedMinutes,
-  inProgressMinutes = 0,
-  todayMinutesByTaskId = {}
-}) {
+      t,
+      modeKey,
+      customDurations,
+      switchMode,
+      phase,
+      running,
+      secondsLeft,
+      stopwatchSecs,
+      startPause,
+      reset,
+      stopSession,
+      R,
+      CIRC,
+      progress,
+      tasks,
+      newTask,
+      setNewTask,
+      addTask,
+      toggleTask,
+      removeTask,
+      activeTaskId,
+      setActiveTaskId,
+      setTaskTarget,
+      todayFocusedMinutes,
+      inProgressMinutes = 0,
+      todayMinutesByTaskId = {}
+  }) {
   const displaySeconds =
     modeKey === "stopwatch" ? stopwatchSecs : secondsLeft;
 
@@ -39,8 +40,8 @@ export default function TimerScreen({
     <div>
       {/* Mode selection header */}
       <div style={{ display: "flex", gap: 6, marginBottom: 22 }}>
-        {Object.entries(MODES).map(([key, m]) => (
-          <button
+         {Object.entries(MODES).map(([key, m]) => (
+           <button
             key={key}
             onClick={() => switchMode(key)}
             style={{
@@ -51,20 +52,21 @@ export default function TimerScreen({
                 modeKey === key ? t.moss : t.line
               }`,
               background:
-                modeKey === key ? t.moss : "transparent",
-              color:
-                modeKey === key ? t.bg : t.sub,
-              fontSize: 12.5,
-              fontWeight: 600,
-              cursor: "pointer",
-              transition: "all .2s"
-            }}
-          >
-            {m.label}
-          </button>
-        ))}
+                  modeKey === key ? t.moss : "transparent",
+                color:
+                  modeKey === key ? t.bg : t.sub,
+                fontSize: 12.5,
+                fontWeight: 600,
+                cursor: "pointer",
+                transition: "all .2s"
+              }}
+               >
+      {key === "stopwatch" 
+        ? m.label 
+        : `${customDurations[key].work} / ${customDurations[key].rest}`}
+    </button>
+  ))}
       </div>
-
       {/* Radial Timer Visualization */}
       <div
         style={{
