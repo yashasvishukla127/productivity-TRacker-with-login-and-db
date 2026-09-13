@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Timer as TimerIcon, BarChart3, Moon, Sun, CalendarDays, Grid2x2, Heart, Settings as SettingsIcon } from "lucide-react";
 import { MODES, THEMES, TASK_COLORS } from "./theme";
 import { uid, fmt, todayKey, minutesSinceMidnight, addDays } from "./utils/dates";
+import { playSound, DEFAULT_WORK_END_SOUND, DEFAULT_BREAK_END_SOUND } from "./lib/sounds";
+import { enableBackgroundMode, disableBackgroundMode } from "./lib/backgroundMode";
 
 import TimerScreen from "./components/TimerScreen";
 import PlannerScreen from "./components/PlannerScreen";
@@ -56,6 +58,8 @@ export default function FocusApp() {
   const [dayStartHour, setDayStartHour] = useState(0);
   const [showLogModal, setShowLogModal] = useState(false);
   const [autoContinue, setAutoContinue] = useState(true);
+  const [workEndSoundId, setWorkEndSoundId] = useState(DEFAULT_WORK_END_SOUND);
+  const [breakEndSoundId, setBreakEndSoundId] = useState(DEFAULT_BREAK_END_SOUND);  
 
   const [eisenhower, setEisenhower] = useState([]); // {id,text,quadrant,done,notes,subtasks:[{id,text,done}]}
   const [planner, setPlanner] = useState({});
@@ -71,12 +75,25 @@ export default function FocusApp() {
 
   const storageApi = typeof window !== "undefined" && window.storage ? window.storage : localStorageAdapter;
 
+  const flushQueuedWrites = useCallback(async () => {
+    const pending = getQueuedWrites();
+    for (const [key, value] of Object.entries(pending)) {
+      try {
+        await storageApi.set(key, JSON.stringify(value), false);
+        clearQueuedWrite(key);
+      } catch (e) {
+        // still offline (or Supabase still unreachable) — leave it queued, try again next time
+      }
+    }
+  }, [storageApi]);
+
+
   useEffect(() => {
     (async () => {
       try {
-        const keys = ["tasks", "sessions", "durations", "theme", "themeName", "goal", "eisenhower", "planner", "whyText", "motivationLog", "compareDates", "challengesLog", "sleepSettings", "dayStartHour", "consistencyTasks", "autoContinue"];
+        const keys = ["tasks", "sessions", "durations", "theme", "themeName", "goal", "eisenhower", "planner", "whyText", "motivationLog", "compareDates", "challengesLog", "sleepSettings", "dayStartHour", "consistencyTasks", "autoContinue", "workEndSoundId", "breakEndSoundId"];
         const results = await Promise.allSettled(keys.map((k) => storageApi.get(k, false)));
-        const [t, s, c, th, tn, g, ei, pl, why, mo, cd, ch, sl, dsh, ct, ac] = results;
+        const [t, s, c, th, tn, g, ei, pl, why, mo, cd, ch, sl, dsh, ct, ac, wes, bes] = results;
 
         if (t.status === "fulfilled" && t.value) setTasks(JSON.parse(t.value.value));
         if (s.status === "fulfilled" && s.value) setSessions(JSON.parse(s.value.value));
@@ -98,14 +115,22 @@ export default function FocusApp() {
         if (dsh.status === "fulfilled" && dsh.value) setDayStartHour(JSON.parse(dsh.value.value));
         if (ct.status === "fulfilled" && ct.value) setConsistencyTasks(JSON.parse(ct.value.value));
         if (ac.status === "fulfilled" && ac.value) setAutoContinue(JSON.parse(ac.value.value));
-      } catch (e) {
+        if (wes.status === "fulfilled" && wes.value) setWorkEndSoundId(JSON.parse(wes.value.value));
+        if (bes.status === "fulfilled" && bes.value) setBreakEndSoundId(JSON.parse(bes.value.value));
+        } catch (e) {
         console.error("Load error", e);
-      } finally {
-        setLoaded(true);
-      }
-    })();
+        } finally {
+          setLoaded(true);
+          flushQueuedWrites();
+          }
+        })();
 
     initNotifications();
+  }, [storageApi]);
+
+  useEffect(() => {
+    window.addEventListener("online", flushQueuedWrites);
+    return () => window.removeEventListener("online", flushQueuedWrites);
   }, [storageApi]);
 
   // Resume an in-progress timer after the app was backgrounded/killed and
@@ -204,7 +229,8 @@ export default function FocusApp() {
             TIMER_NOTIFICATION_ID,
             new Date(resolved.endTimestamp),
             resolved.phase === "work" ? "Break's over" : "Focus session complete",
-            resolved.phase === "work" ? "Back to work." : "Nice work — time for a break."
+            resolved.phase === "work" ? "Back to work." : "Nice work — time for a break.",
+            resolved.phase === "work" ? workEndSoundId : breakEndSoundId
           );
         }
       } else {
@@ -265,7 +291,7 @@ export default function FocusApp() {
             );
           }
 
-          beep();
+          beep(phase);
           clearInterval(intervalRef.current);
           setPhase(resolved.phase);
 
@@ -314,7 +340,10 @@ export default function FocusApp() {
                 : "Focus session complete",
               resolved.phase === "work"
                 ? "Back to work."
-                : "Nice work — time for a break."
+                : "Nice work — time for a break.",
+              resolved.phase === "work"
+                ? workEndSoundId
+                : breakEndSoundId
             );
           }
         } else {
@@ -327,15 +356,17 @@ export default function FocusApp() {
     return () => document.removeEventListener("visibilitychange", onVisible);
   });
 
-  const persist = useCallback(
+    const persist = useCallback(
     (key, value) => {
       clearTimeout(saveTimeout.current[key]);
 
       saveTimeout.current[key] = setTimeout(async () => {
         try {
           await storageApi.set(key, JSON.stringify(value), false);
+          clearQueuedWrite(key);
         } catch (e) {
           console.error("Save error", e);
+          queueWrite(key, value);
         }
       }, 300);
     },
@@ -407,6 +438,15 @@ export default function FocusApp() {
   }, [autoContinue, loaded, persist]);
 
   useEffect(() => {
+  if (loaded) persist("workEndSoundId", workEndSoundId);
+  }, [workEndSoundId, loaded, persist]);
+
+  useEffect(() => {
+    if (loaded) persist("breakEndSoundId", breakEndSoundId);
+  }, [breakEndSoundId, loaded, persist]);
+
+
+  useEffect(() => {
     if (!running) return;
 
     intervalRef.current = setInterval(() => {
@@ -425,28 +465,18 @@ export default function FocusApp() {
     }, 1000);
 
     return () => clearInterval(intervalRef.current);
-  }, [running, modeKey]);
+  }, [running, modeKey , phase]);
 
-  function beep() {
-    try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
+ 
+  function beep(justFinishedPhase) {
+  playSound(
+    justFinishedPhase === "work"
+      ? workEndSoundId
+      : breakEndSoundId
+  );
+  } 
 
-      o.connect(g);
-      g.connect(ctx.destination);
 
-      o.frequency.value = 660;
-      g.gain.setValueAtTime(0.15, ctx.currentTime);
-      g.gain.exponentialRampToValueAtTime(
-        0.001,
-        ctx.currentTime + 0.6
-      );
-
-      o.start();
-      o.stop(ctx.currentTime + 0.6);
-    } catch (e) {}
-  }
 
   function logSession(minutes, mode, startDate, note, taskId) {
     if (minutes <= 0) return;
@@ -494,165 +524,193 @@ export default function FocusApp() {
     });
 
     scheduleSessionEnd(
-      TIMER_NOTIFICATION_ID,
-      new Date(endTimestamp),
-      nextPhase === "work"
-        ? "Break's over"
-        : "Focus session complete",
-      nextPhase === "work"
-        ? "Back to work."
-        : "Nice work — time for a break."
-    );
-  }
-
-  function handlePhaseEnd() {
-    beep();
-    clearInterval(intervalRef.current);
-
-    const durs = customDurations[modeKey];
-    const activeTask = tasks.find((tk) => tk.id === activeTaskId);
-
-    if (phase === "work") {
-      logSession(
-        durs.work,
-        modeKey,
-        sessionStartRef.current
-          ? new Date(sessionStartRef.current)
-          : new Date(),
-        activeTask ? activeTask.text : "",
-        activeTask ? activeTask.id : null
+        TIMER_NOTIFICATION_ID,
+        new Date(endTimestamp),
+        nextPhase === "work"
+          ? "Break's over"
+          : "Focus session complete",
+        nextPhase === "work"
+          ? "Back to work."
+          : "Nice work — time for a break.",
+        nextPhase === "work"
+          ? workEndSoundId
+          : breakEndSoundId
       );
-
-      if (activeTaskId) {
-        setTasks((prev) =>
-          prev.map((tk) =>
-            tk.id === activeTaskId ? { ...tk, done: true } : tk
-          )
-        );
-      }
-
-      if (autoContinue) {
-        startPhaseAuto("rest", modeKey, durs);
-      } else {
-        setRunning(false);
-        cancelSessionEnd(TIMER_NOTIFICATION_ID);
-        setPhase("rest");
-        setSecondsLeft(durs.rest * 60);
-
-        saveActiveTimer({
-          modeKey,
-          phase: "rest",
-          running: false,
-          endTimestamp: null,
-          remainingSeconds: durs.rest * 60,
-          stopwatchStartTimestamp: null,
-          stopwatchBaseSecs: 0
-        });
-      }
-    } else {
-      if (autoContinue) {
-        startPhaseAuto("work", modeKey, durs);
-      } else {
-        setRunning(false);
-        cancelSessionEnd(TIMER_NOTIFICATION_ID);
-        setPhase("work");
-        setSecondsLeft(durs.work * 60);
-
-        saveActiveTimer({
-          modeKey,
-          phase: "work",
-          running: false,
-          endTimestamp: null,
-          remainingSeconds: durs.work * 60,
-          stopwatchStartTimestamp: null,
-          stopwatchBaseSecs: 0
-        });
-      }
-    }
   }
 
-  function startPause() {
-    if (!running) {
-      sessionStartRef.current = Date.now();
-      setRunning(true);
+function handlePhaseEnd() {
+  beep(phase);
+  clearInterval(intervalRef.current);
 
-      if (modeKey === "stopwatch") {
-        saveActiveTimer({
-          modeKey,
-          phase,
-          running: true,
-          endTimestamp: null,
-          remainingSeconds: null,
-          stopwatchStartTimestamp: Date.now(),
-          stopwatchBaseSecs: stopwatchSecs
-        });
-      } else {
-        const endTimestamp =
-          Date.now() + secondsLeft * 1000;
+  const durs = customDurations[modeKey];
+  const activeTask = tasks.find((tk) => tk.id === activeTaskId);
 
-        saveActiveTimer({
-          modeKey,
-          phase,
-          running: true,
-          endTimestamp,
-          remainingSeconds: null,
-          stopwatchStartTimestamp: null,
-          stopwatchBaseSecs: 0
-        });
+  if (phase === "work") {
+    logSession(
+      durs.work,
+      modeKey,
+      sessionStartRef.current
+        ? new Date(sessionStartRef.current)
+        : new Date(),
+      activeTask ? activeTask.text : "",
+      activeTask ? activeTask.id : null
+    );
 
-        scheduleSessionEnd(
-          TIMER_NOTIFICATION_ID,
-          new Date(endTimestamp),
-          phase === "work"
-            ? "Focus session complete"
-            : "Break's over",
-          phase === "work"
-            ? "Nice work — time for a break."
-            : "Ready to get back to it?"
-        );
-      }
+    if (activeTaskId) {
+      setTasks((prev) =>
+        prev.map((tk) =>
+          tk.id === activeTaskId ? { ...tk, done: true } : tk
+        )
+      );
+    }
+
+    if (autoContinue) {
+      startPhaseAuto("rest", modeKey, durs);
     } else {
       setRunning(false);
-      clearInterval(intervalRef.current);
+      disableBackgroundMode();
       cancelSessionEnd(TIMER_NOTIFICATION_ID);
+      setPhase("rest");
+      setSecondsLeft(durs.rest * 60);
 
-      if (modeKey === "stopwatch") {
-        if (stopwatchSecs > 0) {
-          const activeTask = tasks.find(
-            (tk) => tk.id === activeTaskId
-          );
+      saveActiveTimer({
+        modeKey,
+        phase: "rest",
+        running: false,
+        endTimestamp: null,
+        remainingSeconds: durs.rest * 60,
+        stopwatchStartTimestamp: null,
+        stopwatchBaseSecs: 0
+      });
+    }
+  } else {
+    if (autoContinue) {
+      startPhaseAuto("work", modeKey, durs);
+    } else {
+      setRunning(false);
+      disableBackgroundMode();
+      cancelSessionEnd(TIMER_NOTIFICATION_ID);
+      setPhase("work");
+      setSecondsLeft(durs.work * 60);
 
-            logSession(
-            Math.round(stopwatchSecs / 60),
-            "stopwatch",
-            new Date(sessionStartRef.current),
-            activeTask ? activeTask.text : "",
-            activeTask?.id
-          );
-        }
-
-        saveActiveTimer({
-          modeKey,
-          phase,
-          running: false,
-          endTimestamp: null,
-          remainingSeconds: null,
-          stopwatchStartTimestamp: null,
-          stopwatchBaseSecs: stopwatchSecs
-        });
-      } else {
-        saveActiveTimer({
-          modeKey,
-          phase,
-          running: false,
-          endTimestamp: null,
-          remainingSeconds: secondsLeft,
-          stopwatchStartTimestamp: null,
-          stopwatchBaseSecs: 0
-        });
-      }
+      saveActiveTimer({
+        modeKey,
+        phase: "work",
+        running: false,
+        endTimestamp: null,
+        remainingSeconds: durs.work * 60,
+        stopwatchStartTimestamp: null,
+        stopwatchBaseSecs: 0
+      });
     }
   }
+}
+
+
+
+
+
+
+
+function startPause() {
+  if (!running) {
+    sessionStartRef.current = Date.now();
+    setRunning(true);
+    enableBackgroundMode();
+
+    if (modeKey === "stopwatch") {
+      saveActiveTimer({
+        modeKey,
+        phase,
+        running: true,
+        endTimestamp: null,
+        remainingSeconds: null,
+        stopwatchStartTimestamp: Date.now(),
+        stopwatchBaseSecs: stopwatchSecs
+      });
+    } else {
+      const endTimestamp =
+        Date.now() + secondsLeft * 1000;
+
+      saveActiveTimer({
+        modeKey,
+        phase,
+        running: true,
+        endTimestamp,
+        remainingSeconds: null,
+        stopwatchStartTimestamp: null,
+        stopwatchBaseSecs: 0
+      });
+
+      scheduleSessionEnd(
+        TIMER_NOTIFICATION_ID,
+        new Date(endTimestamp),
+        phase === "work"
+          ? "Focus session complete"
+          : "Break's over",
+        phase === "work"
+          ? "Nice work — time for a break."
+          : "Ready to get back to it?",
+        phase === "work"
+          ? workEndSoundId
+          : breakEndSoundId
+      );
+    }
+  } else {
+    setRunning(false);
+    disableBackgroundMode();
+    clearInterval(intervalRef.current);
+    cancelSessionEnd(TIMER_NOTIFICATION_ID);
+
+    if (modeKey === "stopwatch") {
+      if (stopwatchSecs > 0) {
+        const activeTask = tasks.find(
+          (tk) => tk.id === activeTaskId
+        );
+
+        logSession(
+          Math.round(stopwatchSecs / 60),
+          "stopwatch",
+          new Date(sessionStartRef.current),
+          activeTask ? activeTask.text : "",
+          activeTask?.id
+        );
+      }
+
+      saveActiveTimer({
+        modeKey,
+        phase,
+        running: false,
+        endTimestamp: null,
+        remainingSeconds: null,
+        stopwatchStartTimestamp: null,
+        stopwatchBaseSecs: stopwatchSecs
+      });
+    } else {
+      saveActiveTimer({
+        modeKey,
+        phase,
+        running: false,
+        endTimestamp: null,
+        remainingSeconds: secondsLeft,
+        stopwatchStartTimestamp: null,
+        stopwatchBaseSecs: 0
+      });
+    }
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
 
 function reset() {
   setRunning(false);
@@ -1285,6 +1343,10 @@ const inProgressMinutes =
               setDayStartHour={setDayStartHour}
               autoContinue={autoContinue}
               setAutoContinue={setAutoContinue}
+              workEndSoundId={workEndSoundId}
+              setWorkEndSoundId={setWorkEndSoundId}
+              breakEndSoundId={breakEndSoundId}
+              setBreakEndSoundId={setBreakEndSoundId}
             />
           )}
         </div>

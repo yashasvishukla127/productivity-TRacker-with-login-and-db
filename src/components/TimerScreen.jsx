@@ -277,7 +277,8 @@ export default function TimerScreen({
       <div
         style={{
           borderTop: `1px solid ${t.line}`,
-          paddingTop: 16
+          paddingTop: 16,
+          textAlign: "center"
         }}
       >
         <div
@@ -290,26 +291,27 @@ export default function TimerScreen({
         >
           <span
             style={{
-              fontSize: 11,
+              fontSize: 14,
               color: t.sub,
               textTransform: "uppercase",
-              letterSpacing: "0.1em"
+              letterSpacing: "0.1em",
+              fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+              fontWeight: 600,
+              letterSpacing: "0.15em"
             }}
           >
-            Focus on
+            WORKING TASKs
           </span>
-          {todayFocusedMinutes > 0 && (
-            <span
-              style={{
-                fontSize: 10.5,
-                color: t.sub,
-                opacity: 0.6,
-                fontFamily: "system-ui"
-              }}
-            >
-              Today: {Math.floor(todayFocusedMinutes / 60)}h {Math.round(todayFocusedMinutes % 60)}m
-            </span>
-          )}
+          <span
+            style={{
+              fontSize: 10.5,
+              color: t.sub,
+              opacity: 0.6,
+              fontFamily: "system-ui"
+            }}
+          >
+            Today: {Math.floor(todayFocusedMinutes / 60)}h {Math.round(todayFocusedMinutes % 60)}m
+          </span>
         </div>
 
         {/* New Task Input */}
@@ -384,7 +386,7 @@ export default function TimerScreen({
 
           {tasks.map((tk) => {
             const taskColor = tk.color || t.moss;
-            const liveExtra = (running && tk.id === activeTaskId) ? inProgressMinutes : 0;
+            const liveExtra = (tk.id === activeTaskId) ? inProgressMinutes : 0;
             const minutesSoFar = (todayMinutesByTaskId[tk.id] || 0) + liveExtra;
             const taskProgress = tk.targetHours ? Math.min(100, (minutesSoFar / (tk.targetHours * 60)) * 100) : 0;
 
