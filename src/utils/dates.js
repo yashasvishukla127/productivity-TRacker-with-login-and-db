@@ -18,6 +18,23 @@ export function slotLabel(i) { const h = Math.floor(i / 2); const m = i % 2 === 
 export function slotIndexFromMinutes(mins) { return Math.round(mins / 30); }
 export function isSleepText(text) { return !!text && text.trim().toLowerCase() === "sleep"; }
 export function timeToMin(hhmm) { const [h, m] = (hhmm || "00:00").split(":").map(Number); return h * 60 + m; }
+export function minToTime(min) {
+  const m = ((min % 1440) + 1440) % 1440;
+  const h = Math.floor(m / 60).toString().padStart(2, "0");
+  const mm = (m % 60).toString().padStart(2, "0");
+  return `${h}:${mm}`;
+}
+export function mapMinuteToPercent(min, wakeMin, sleepMin, activeWidthPct = 88) {
+  const activeDur = ((sleepMin - wakeMin + 1440) % 1440) || 1440;
+  const sleepDur = 1440 - activeDur;
+  const sinceWake = ((min - wakeMin) % 1440 + 1440) % 1440;
+  if (sleepDur === 0 || sinceWake <= activeDur) {
+    return (sinceWake / activeDur) * (sleepDur === 0 ? 100 : activeWidthPct);
+  }
+  const sinceSleepStart = sinceWake - activeDur;
+  return activeWidthPct + (sinceSleepStart / sleepDur) * (100 - activeWidthPct);
+}
+
 export function resolveRow(anchorDate, row, dayStartHour) {
   const raw = dayStartHour * 2 + row;
   const wrapped = raw >= 48;

@@ -1,30 +1,30 @@
-import React, { useState } from "react";
-import { todayKey, addDays, timeToMin } from "../utils/dates";
+import React, { useState, useMemo } from "react";
+import { todayKey, addDays, timeToMin, minToTime, mapMinuteToPercent } from "../utils/dates";
 import { SLEEP_COLOR } from "../theme";
 
-function sleepSegmentsForDay(dateStr, sleepSettings) {
-  if (!sleepSettings?.enabled) return [];
-  const startMin = timeToMin(sleepSettings.start);
-  const endMin = timeToMin(sleepSettings.end);
-  if (startMin === endMin) return [];
-  if (endMin < startMin) {
-    // crosses midnight: morning remainder (from previous night) + tonight's start
-    return [
-      { start: 0, minutes: endMin, real: true },
-      { start: startMin, minutes: 1440 - startMin, real: true },
-    ];
-  }
-  return [{ start: startMin, minutes: endMin - startMin, real: true }];
-}
+const ACTIVE_WIDTH_PCT = 88; // waking hours get 88% of the bar, sleep gets the rest
 
 export default function RecordsView({ t, sessions, sleepSettings, tasks = [] }) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const [daysToShow, setDaysToShow] = useState(14);
   const days = Array.from({ length: daysToShow }, (_, i) => addDays(today, -i));
-  const hourMarks = [0, 4, 8, 12, 16, 20, 24];
   const [selected, setSelected] = useState(null);
 
   const colorByTaskId = Object.fromEntries(tasks.map((tk) => [tk.id, tk.color]));
+
+  const sleepOn = !!sleepSettings?.enabled;
+  const wakeMin = sleepOn ? timeToMin(sleepSettings.end) : 0;
+  const sleepMin = sleepOn ? timeToMin(sleepSettings.start) : 0;
+  const pct = (min) => mapMinuteToPercent(min, wakeMin, sleepMin, ACTIVE_WIDTH_PCT);
+  const activeEndPct = sleepOn ? pct(sleepMin) : 100;
+
+  const hourMarks = useMemo(() => {
+    const activeDur = sleepOn ? ((sleepMin - wakeMin + 1440) % 1440) || 1440 : 1440;
+    const stepMin = activeDur > 12 * 60 ? 180 : 120;
+    const marks = [];
+    for (let m = 0; m <= activeDur; m += stepMin) marks.push({ min: wakeMin + m, pct: pct(wakeMin + m) });
+    return marks;
+  }, [wakeMin, sleepMin, sleepOn]);
 
   return (
     <div>
@@ -32,55 +32,60 @@ export default function RecordsView({ t, sessions, sleepSettings, tasks = [] }) 
         <div style={{ display: "grid", gridTemplateColumns: "54px 1fr", fontSize: 9.5, color: t.sub, marginBottom: 6 }}>
           <div />
           <div style={{ position: "relative", height: 14 }}>
-            {hourMarks.map((h) => (
-              <span key={h} style={{ position: "absolute", left: `${(h / 24) * 100}%`, transform: "translateX(-50%)" }}>
-                {h}
+            {hourMarks.map((mk) => (
+              <span key={mk.min} style={{ position: "absolute", left: `${mk.pct}%`, transform: "translateX(-50%)" }}>
+                {minToTime(mk.min)}
               </span>
             ))}
+            {sleepOn && (
+              <span style={{ position: "absolute", left: `${activeEndPct + (100 - activeEndPct) / 2}%`, transform: "translateX(-50%)", color: t.sub, fontStyle: "italic" }}>
+                sleep
+              </span>
+            )}
           </div>
         </div>
         <div className="sf-scroll" style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 380, overflowY: "auto", paddingRight: 2 }}>
           {days.map((d) => {
             const key = todayKey(d);
             const daySessions = sessions.filter((s) => s.date === key);
-            const sleepSegs = sleepSegmentsForDay(key, sleepSettings);
+            const sleepId = `sleep-${key}`;
             return (
               <div key={key} style={{ display: "grid", gridTemplateColumns: "54px 1fr", alignItems: "center" }}>
                 <span style={{ fontSize: 10.5, color: t.sub }}>
                   {key === todayKey() ? "Today" : d.toLocaleDateString(undefined, { day: "2-digit", month: "short" })}
                 </span>
-                <div style={{ position: "relative", height: 16, background: t.bg, borderRadius: 4 }}>
-                  {sleepSegs.map((seg, idx) => {
-                    const left = (seg.start / 1440) * 100;
-                    const sleepId = `sleep-${key}-${idx}`;
-                    return (
-                      <div
-                        key={sleepId}
-                        onClick={() => setSelected({ id: sleepId, date: key, startMinutes: seg.start, minutes: seg.minutes, note: "Sleep", isSleep: true })}
-                        title={`Sleep · ${seg.minutes}m`}
-                        style={{
-                          position: "absolute",
-                          left: `${left}%`,
-                          width: 9,
-                          minWidth: 9,
-                          maxWidth: 9,
-                          top: 2,
-                          bottom: 2,
-                          background: SLEEP_COLOR,
-                          borderRadius: 3,
-                          opacity: selected?.id === sleepId ? 1 : 0.9,
-                          cursor: "pointer",
-                          outline: selected?.id === sleepId ? `2px solid ${t.ink}` : "none",
-                          zIndex: 3,
-                          boxShadow: "0 0 0 1px rgba(0,0,0,0.08)",
-                        }}
-                      />
-                    );
-                  })}
+                <div style={{ position: "relative", height: 16, background: t.bg, borderRadius: 4, overflow: "hidden" }}>
+                  {sleepOn && (
+                    <div
+                      onClick={() =>
+                        setSelected({
+                          id: sleepId,
+                          date: key,
+                          startMinutes: sleepMin,
+                          minutes: (1440 - ((sleepMin - wakeMin + 1440) % 1440)) || 1440,
+                          note: "Sleep",
+                          isSleep: true,
+                        })
+                      }
+                      title="Sleep (compressed)"
+                      style={{
+                        position: "absolute",
+                        left: `${activeEndPct}%`,
+                        right: 0,
+                        top: 0,
+                        bottom: 0,
+                        background: `repeating-linear-gradient(135deg, ${SLEEP_COLOR}33, ${SLEEP_COLOR}33 3px, ${SLEEP_COLOR}1a 3px, ${SLEEP_COLOR}1a 6px)`,
+                        borderLeft: `1px solid ${t.line}`,
+                        cursor: "pointer",
+                        outline: selected?.id === sleepId ? `2px solid ${t.ink}` : "none",
+                      }}
+                    />
+                  )}
                   {daySessions.map((s) => {
                     const start = s.startMinutes ?? 540;
-                    const left = (start / 1440) * 100;
-                    const width = Math.max((s.minutes / 1440) * 100, 1.2);
+                    const left = pct(start);
+                    const right = pct(start + s.minutes);
+                    const width = Math.max(right - left, 1.2);
                     return (
                       <div
                         key={s.id}
@@ -94,7 +99,7 @@ export default function RecordsView({ t, sessions, sleepSettings, tasks = [] }) 
                           bottom: 2,
                           background: colorByTaskId[s.taskId] || (s.manual ? t.clay : t.moss),
                           borderRadius: 3,
-                          opacity: selected?.id === s.id ? 1 : 0.8,
+                          opacity: selected?.id === s.id ? 1 : 0.85,
                           cursor: "pointer",
                           outline: selected?.id === s.id ? `2px solid ${t.ink}` : "none",
                           zIndex: 2,
@@ -121,10 +126,12 @@ export default function RecordsView({ t, sessions, sleepSettings, tasks = [] }) 
             <span style={{ width: 8, height: 8, borderRadius: 2, background: t.clay, display: "inline-block" }} />
             Logged manually
           </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <span style={{ width: 8, height: 8, borderRadius: 2, background: SLEEP_COLOR, display: "inline-block" }} />
-            Sleep (shrunk)
-          </span>
+          {sleepOn && (
+            <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: SLEEP_COLOR, opacity: 0.4, display: "inline-block" }} />
+              Sleep (compressed)
+            </span>
+          )}
         </div>
       </div>
       <div style={{ marginTop: 10, minHeight: 40, background: t.surface, borderRadius: 10, padding: "10px 12px", fontSize: 12.5, color: selected ? t.ink : t.sub }}>
@@ -143,8 +150,10 @@ export default function RecordsView({ t, sessions, sleepSettings, tasks = [] }) 
               </span>
             );
           })()
+        ) : sleepOn ? (
+          `Tap a block above to see its date, time and duration. The timeline starts at your wake time (${sleepSettings.end}) and sleep is compressed on the right.`
         ) : (
-          "Tap a block above to see its date, time and duration. Sleep blocks are shown compact so your focus sessions stay easy to read."
+          "Tap a block above to see its date, time and duration. Set a wake/sleep time in Settings to compress the sleep hours."
         )}
       </div>
     </div>
