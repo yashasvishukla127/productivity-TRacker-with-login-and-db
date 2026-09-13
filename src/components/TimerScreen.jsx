@@ -4,94 +4,93 @@ import { MODES } from "../theme";
 import { fmt } from "../utils/dates";
 
 export default function TimerScreen({
-      t,
-      modeKey,
-      customDurations,
-      switchMode,
-      phase,
-      running,
-      secondsLeft,
-      stopwatchSecs,
-      startPause,
-      reset,
-      stopSession,
-      R,
-      CIRC,
-      progress,
-      tasks,
-      newTask,
-      setNewTask,
-      addTask,
-      toggleTask,
-      removeTask,
-      activeTaskId,
-      setActiveTaskId,
-      setTaskTarget,
-      todayFocusedMinutes,
-      inProgressMinutes = 0,
-      todayMinutesByTaskId = {}
-  }) {
-  const displaySeconds =
-    modeKey === "stopwatch" ? stopwatchSecs : secondsLeft;
-
+  t,
+  modeKey,
+  customDurations,
+  switchMode,
+  phase,
+  running,
+  secondsLeft,
+  stopwatchSecs,
+  startPause,
+  reset,
+  stopSession,
+  R,
+  CIRC,
+  progress,
+  tasks,
+  newTask,
+  setNewTask,
+  addTask,
+  toggleTask,
+  removeTask,
+  breakTasks,
+  newBreakTask,
+  setNewBreakTask,
+  addBreakTask,
+  toggleBreakTask,
+  removeBreakTask,
+  activeTaskId,
+  setActiveTaskId,
+  setTaskTarget,
+  todayFocusedMinutes,
+  inProgressMinutes = 0,
+  todayMinutesByTaskId = {}
+}) {
+  const displaySeconds = modeKey === "stopwatch" ? stopwatchSecs : secondsLeft;
   const activeTask = tasks.find((tk) => tk.id === activeTaskId);
 
   return (
     <div>
       {/* Mode selection header */}
       <div style={{ display: "flex", gap: 6, marginBottom: 22 }}>
-         {Object.entries(MODES).map(([key, m]) => (
-           <button
+        {Object.entries(MODES).map(([key, m]) => (
+          <button
             key={key}
             onClick={() => switchMode(key)}
             style={{
               flex: 1,
               padding: "8px 6px",
               borderRadius: 999,
-              border: `1px solid ${
-                modeKey === key ? t.moss : t.line
-              }`,
-              background:
-                  modeKey === key ? t.moss : "transparent",
-                color:
-                  modeKey === key ? t.bg : t.sub,
-                fontSize: 12.5,
-                fontWeight: 600,
-                cursor: "pointer",
-                transition: "all .2s"
-              }}
-               >
-      {key === "stopwatch" 
-        ? m.label 
-        : `${customDurations[key].work} / ${customDurations[key].rest}`}
-    </button>
-  ))}
+              border: `1px solid ${modeKey === key ? t.moss : t.line}`,
+              background: modeKey === key ? t.moss : "transparent",
+              color: modeKey === key ? t.bg : t.sub,
+              fontSize: 12.5,
+              fontWeight: 600,
+              cursor: "pointer",
+              transition: "all .2s"
+            }}
+          >
+            {key === "stopwatch"
+              ? m.label
+              : `${customDurations[key].work} / ${customDurations[key].rest}`}
+          </button>
+        ))}
       </div>
+
       {/* Radial Timer Visualization */}
       <div
         style={{
           display: "flex",
           justifyContent: "center",
-          marginBottom: 20
+          marginBottom: phase === "rest" ? 8 : 20,
+          transition: "margin .4s ease"
         }}
       >
         <div
           style={{
             position: "relative",
-            width: 260,
-            height: 260,
-            maxWidth: "100%"
+            width: phase === "rest" ? 120 : 260,
+            height: phase === "rest" ? 120 : 260,
+            maxWidth: "100%",
+            transition: "width .4s ease, height .4s ease"
           }}
         >
           <svg
             width={260}
             height={260}
             viewBox="0 0 260 260"
-            style={{
-              transform: "rotate(-90deg)",
-              width: "100%",
-              height: "auto"
-            }}
+            style={{ transform: "rotate(-90deg)", width: "100%", height: "auto" }}
           >
             <circle
               cx={130}
@@ -276,308 +275,416 @@ export default function TimerScreen({
       </div>
 
       {/* Focus Works & Task List */}
-      <div
-        style={{
-          borderTop: `1px solid ${t.line}`,
-          paddingTop: 16,
-          textAlign: "center"
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 10
-          }}
-        >
-          <span
+      {phase === "work" && (
+        <>
+          <div
             style={{
-              fontSize: 14,
-              color: t.sub,
-              textTransform: "uppercase",
-              letterSpacing: "0.1em",
-              fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
-              fontWeight: 600,
-              letterSpacing: "0.15em"
+              borderTop: `1px solid ${t.line}`,
+              paddingTop: 16,
+              textAlign: "center"
             }}
           >
-            WORKING TASKs
-          </span>
-          <span
-            style={{
-              fontSize: 10.5,
-              color: t.sub,
-              opacity: 0.6,
-              fontFamily: "system-ui"
-            }}
-          >
-            Today: {Math.floor(todayFocusedMinutes / 60)}h {Math.round(todayFocusedMinutes % 60)}m
-          </span>
-        </div>
-
-        {/* New Task Input */}
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            marginBottom: 12
-          }}
-        >
-          <input
-            value={newTask}
-            onChange={(e) => setNewTask(e.target.value)}
-            onKeyDown={(e) =>
-              e.key === "Enter" && addTask()
-            }
-            placeholder="Add a task"
-            style={{
-              flex: 1,
-              minWidth: 0,
-              background: "transparent",
-              border: `1px solid ${t.line}`,
-              borderRadius: 10,
-              padding: "8px 12px",
-              color: t.ink,
-              fontSize: 13.5,
-              outline: "none",
-              fontFamily: "system-ui"
-            }}
-          />
-
-          <button
-            onClick={addTask}
-            style={{
-              width: 36,
-              flexShrink: 0,
-              borderRadius: 10,
-              border: `1px solid ${t.line}`,
-              background: "transparent",
-              color: t.sub,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center"
-            }}
-          >
-            <Plus size={16} />
-          </button>
-        </div>
-
-        {/* Task Rows */}
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 6,
-            maxHeight: 160,
-            overflowY: "auto"
-          }}
-        >
-          {tasks.length === 0 && (
             <div
               style={{
-                fontSize: 12.5,
-                color: t.sub,
-                fontStyle: "italic"
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 10
               }}
             >
-              No tasks yet — add one to attach to your session.
-            </div>
-          )}
-
-          {tasks.map((tk) => {
-            const taskColor = tk.color || t.moss;
-            const liveExtra = (tk.id === activeTaskId) ? inProgressMinutes : 0;
-            const minutesSoFar = (todayMinutesByTaskId[tk.id] || 0) + liveExtra;
-            const taskProgress = tk.targetHours ? Math.min(100, (minutesSoFar / (tk.targetHours * 60)) * 100) : 0;
-
-            const spentHrs = Math.floor(minutesSoFar / 60);
-            const spentMins = Math.round(minutesSoFar % 60);
-            const timeLabel = tk.targetHours
-              ? `${spentHrs > 0 ? `${spentHrs}h ` : ""}${spentMins}m / ${tk.targetHours}h`
-              : null;
-
-            return (
-              <div
-                key={tk.id}
-                onClick={() =>
-                  setActiveTaskId(
-                    tk.id === activeTaskId ? null : tk.id
-                  )
-                }
+              <span
                 style={{
-                  position: "relative",
-                  overflow: "hidden",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "7px 10px",
-                  borderRadius: 8,
-                  background:
-                    activeTaskId === tk.id
-                      ? t.moss + "15"
-                      : "transparent",
-                  border: `1px solid ${activeTaskId === tk.id ? t.moss + "44" : "transparent"}`,
-                  cursor: "pointer"
+                  fontSize: 14,
+                  color: t.sub,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.15em",
+                  fontFamily:
+                    "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+                  fontWeight: 600
                 }}
               >
-                {/* Embedded Progress Fill Layer */}
-                {tk.targetHours > 0 && (
-                  <div
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      width: `${taskProgress}%`,
-                      background: `linear-gradient(90deg, ${taskColor}33, ${taskColor}88)`,
-                      transition: "width 1s linear",
-                      zIndex: 0
-                    }}
-                  />
-                )}
+                WORKING TASKs
+              </span>
+              <span
+                style={{
+                  fontSize: 10.5,
+                  color: t.sub,
+                  opacity: 0.6,
+                  fontFamily: "system-ui"
+                }}
+              >
+                Today: {Math.floor(todayFocusedMinutes / 60)}h{" "}
+                {Math.round(todayFocusedMinutes % 60)}m
+              </span>
+            </div>
 
-                {/* Interactive Row Content (Sits above progress fill) */}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleTask(tk.id);
-                  }}
-                  style={{
-                    position: "relative",
-                    zIndex: 1,
-                    width: 17,
-                    height: 17,
-                    borderRadius: 5,
-                    border: `1.5px solid ${
-                      tk.done ? t.moss : t.sub
-                    }`,
-                    background: tk.done
-                      ? t.moss
-                      : "transparent",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    flexShrink: 0,
-                    cursor: "pointer"
-                  }}
-                >
-                  {tk.done && (
-                    <Check size={11} color={t.bg} />
-                  )}
-                </button>
+            {/* New Task Input */}
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                marginBottom: 12
+              }}
+            >
+              <input
+                value={newTask}
+                onChange={(e) => setNewTask(e.target.value)}
+                onKeyDown={(e) =>
+                  e.key === "Enter" && addTask()
+                }
+                placeholder="Add a task"
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  background: "transparent",
+                  border: `1px solid ${t.line}`,
+                  borderRadius: 10,
+                  padding: "8px 12px",
+                  color: t.ink,
+                  fontSize: 13.5,
+                  outline: "none",
+                  fontFamily: "system-ui"
+                }}
+              />
 
-                <span
-                  style={{
-                    position: "relative",
-                    zIndex: 1,
-                    width: 7,
-                    height: 7,
-                    borderRadius: "50%",
-                    background: taskColor,
-                    flexShrink: 0
-                  }}
-                />
+              <button
+                onClick={addTask}
+                style={{
+                  width: 36,
+                  flexShrink: 0,
+                  borderRadius: 10,
+                  border: `1px solid ${t.line}`,
+                  background: "transparent",
+                  color: t.sub,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center"
+                }}
+              >
+                <Plus size={16} />
+              </button>
+            </div>
 
+            {/* Task Rows */}
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                maxHeight: 160,
+                overflowY: "auto"
+              }}
+            >
+              {tasks.length === 0 && (
                 <div
                   style={{
-                    position: "relative",
-                    zIndex: 1,
-                    flex: 1,
-                    display: "flex",
-                    alignItems: "baseline",
-                    gap: 6,
-                    minWidth: 0
+                    fontSize: 12.5,
+                    color: t.sub,
+                    fontStyle: "italic"
                   }}
                 >
-                  <span
+                  No tasks yet — add one to attach to your session.
+                </div>
+              )}
+
+              {tasks.map((tk) => {
+                const taskColor = tk.color || t.moss;
+                const liveExtra =
+                  tk.id === activeTaskId ? inProgressMinutes : 0;
+                const minutesSoFar =
+                  (todayMinutesByTaskId[tk.id] || 0) + liveExtra;
+                const taskProgress = tk.targetHours
+                  ? Math.min(
+                      100,
+                      (minutesSoFar / (tk.targetHours * 60)) * 100
+                    )
+                  : 0;
+
+                const spentHrs = Math.floor(minutesSoFar / 60);
+                const spentMins = Math.round(minutesSoFar % 60);
+                const timeLabel = tk.targetHours
+                  ? `${
+                      spentHrs > 0 ? `${spentHrs}h ` : ""
+                    }${spentMins}m / ${tk.targetHours}h`
+                  : null;
+
+                return (
+                  <div
+                    key={tk.id}
+                    onClick={() =>
+                      setActiveTaskId(
+                        tk.id === activeTaskId ? null : tk.id
+                      )
+                    }
                     style={{
-                      fontSize: 13,
-                      fontWeight: 500,
-                      textDecoration: tk.done
-                        ? "line-through"
-                        : "none",
-                      color: tk.done ? t.sub : t.ink,
+                      position: "relative",
                       overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap"
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "7px 10px",
+                      borderRadius: 8,
+                      background:
+                        activeTaskId === tk.id
+                          ? t.moss + "15"
+                          : "transparent",
+                      border: `1px solid ${
+                        activeTaskId === tk.id
+                          ? t.moss + "44"
+                          : "transparent"
+                      }`,
+                      cursor: "pointer"
                     }}
                   >
-                    {tk.text}
-                  </span>
+                    {/* Embedded Progress Fill Layer */}
+                    {tk.targetHours > 0 && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          width: `${taskProgress}%`,
+                          background: `linear-gradient(90deg, ${taskColor}33, ${taskColor}88)`,
+                          transition: "width 1s linear",
+                          zIndex: 0
+                        }}
+                      />
+                    )}
 
-                  {timeLabel && (
+                    {/* Interactive Row Content (Sits above progress fill) */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleTask(tk.id);
+                      }}
+                      style={{
+                        position: "relative",
+                        zIndex: 1,
+                        width: 17,
+                        height: 17,
+                        borderRadius: 5,
+                        border: `1.5px solid ${
+                          tk.done ? t.moss : t.sub
+                        }`,
+                        background: tk.done
+                          ? t.moss
+                          : "transparent",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                        cursor: "pointer"
+                      }}
+                    >
+                      {tk.done && (
+                        <Check size={11} color={t.bg} />
+                      )}
+                    </button>
+
                     <span
                       style={{
-                        fontSize: 10.5,
-                        color: t.sub,
-                        opacity: 0.6,
+                        position: "relative",
+                        zIndex: 1,
+                        width: 7,
+                        height: 7,
+                        borderRadius: "50%",
+                        background: taskColor,
+                        flexShrink: 0
+                      }}
+                    />
+
+                    <div
+                      style={{
+                        position: "relative",
+                        zIndex: 1,
+                        flex: 1,
+                        display: "flex",
+                        alignItems: "baseline",
+                        gap: 6,
+                        minWidth: 0
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 500,
+                          textDecoration: tk.done
+                            ? "line-through"
+                            : "none",
+                          color: tk.done ? t.sub : t.ink,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap"
+                        }}
+                      >
+                        {tk.text}
+                      </span>
+
+                      {timeLabel && (
+                        <span
+                          style={{
+                            fontSize: 10.5,
+                            color: t.sub,
+                            opacity: 0.6,
+                            fontFamily: "system-ui",
+                            flexShrink: 0
+                          }}
+                        >
+                          {timeLabel}
+                        </span>
+                      )}
+                    </div>
+
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.5"
+                      value={tk.targetHours ?? ""}
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        const value = e.target.value;
+                        setTaskTarget(
+                          tk.id,
+                          value === "" ? null : Number(value)
+                        );
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      placeholder="h"
+                      aria-label={`Target hours for ${tk.text}`}
+                      style={{
+                        position: "relative",
+                        zIndex: 1,
+                        width: 38,
+                        padding: "3px 4px",
+                        borderRadius: 6,
+                        border: `1px solid ${t.line}`,
+                        background: "transparent",
+                        color: t.ink,
+                        fontSize: 11,
+                        textAlign: "center",
+                        outline: "none",
                         fontFamily: "system-ui",
                         flexShrink: 0
                       }}
+                    />
+
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeTask(tk.id);
+                      }}
+                      style={{
+                        position: "relative",
+                        zIndex: 1,
+                        background: "none",
+                        border: "none",
+                        color: t.sub,
+                        cursor: "pointer",
+                        opacity: 0.6,
+                        display: "flex",
+                        alignItems: "center"
+                      }}
                     >
-                      {timeLabel}
-                    </span>
-                  )}
-                </div>
+                      <X size={13} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
 
-                <input
-                  type="number"
-                  min="0"
-                  step="0.5"
-                  value={tk.targetHours ?? ""}
-                  onChange={(e) => {
-                    e.stopPropagation();
-                    const value = e.target.value;
-                    setTaskTarget(
-                      tk.id,
-                      value === "" ? null : Number(value)
-                    );
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                  onKeyDown={(e) => e.stopPropagation()}
-                  placeholder="h"
-                  aria-label={`Target hours for ${tk.text}`}
+      {/* Break Task List Block */}
+      {phase === "rest" && (
+        <div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <input
+              value={newBreakTask}
+              onChange={(e) => setNewBreakTask(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addBreakTask()}
+              placeholder="Something to do on break..."
+              style={{
+                flex: 1,
+                background: "transparent",
+                border: `1px solid ${t.line}`,
+                borderRadius: 8,
+                padding: "8px 10px",
+                color: t.ink,
+                fontSize: 13.5,
+                outline: "none"
+              }}
+            />
+            <button
+              onClick={addBreakTask}
+              style={{
+                border: `1px solid ${t.line}`,
+                borderRadius: 8,
+                padding: "0 12px",
+                background: "transparent",
+                cursor: "pointer"
+              }}
+            >
+              <Plus size={16} color={t.ink} />
+            </button>
+          </div>
+          {breakTasks.map((tk) => (
+            <div
+              key={tk.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "8px 0",
+                borderBottom: `1px solid ${t.line}`
+              }}
+            >
+              <div
+                onClick={() => toggleBreakTask(tk.id)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  cursor: "pointer",
+                  flex: 1
+                }}
+              >
+                <span
                   style={{
-                    position: "relative",
-                    zIndex: 1,
-                    width: 38,
-                    padding: "3px 4px",
-                    borderRadius: 6,
-                    border: `1px solid ${t.line}`,
-                    background: "transparent",
-                    color: t.ink,
-                    fontSize: 11,
-                    textAlign: "center",
-                    outline: "none",
-                    fontFamily: "system-ui",
-                    flexShrink: 0
-                  }}
-                />
-
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removeTask(tk.id);
-                  }}
-                  style={{
-                    position: "relative",
-                    zIndex: 1,
-                    background: "none",
-                    border: "none",
-                    color: t.sub,
-                    cursor: "pointer",
-                    opacity: 0.6,
+                    width: 16,
+                    height: 16,
+                    borderRadius: 4,
+                    border: `1.5px solid ${t.line}`,
                     display: "flex",
-                    alignItems: "center"
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: tk.done ? t.moss : "transparent"
                   }}
                 >
-                  <X size={13} />
-                </button>
+                  {tk.done && <Check size={11} color={t.bg} />}
+                </span>
+                <span
+                  style={{
+                    fontSize: 13.5,
+                    color: t.ink,
+                    textDecoration: tk.done ? "line-through" : "none",
+                    opacity: tk.done ? 0.5 : 1
+                  }}
+                >
+                  {tk.text}
+                </span>
               </div>
-            );
-          })}
+              <X
+                size={14}
+                color={t.sub}
+                style={{ cursor: "pointer" }}
+                onClick={() => removeBreakTask(tk.id)}
+              />
+            </div>
+          ))}
         </div>
-      </div>
+      )}
     </div>
   );
 }

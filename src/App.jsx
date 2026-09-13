@@ -26,7 +26,6 @@ const localStorageAdapter = {
       return null;
     }
   },
-
   async set(key, value) {
     try {
       window.localStorage.setItem(key, value);
@@ -52,6 +51,10 @@ export default function FocusApp() {
   const [newTask, setNewTask] = useState("");
   const [activeTaskId, setActiveTaskId] = useState(null);
 
+  // A. New state
+  const [breakTasks, setBreakTasks] = useState([]);
+  const [newBreakTask, setNewBreakTask] = useState("");
+
   const [sessions, setSessions] = useState([]);
   const [customDurations, setCustomDurations] = useState({ pomodoro: { work: 25, rest: 5 }, deepwork: { work: 40, rest: 10 } });
   const [dailyGoalMinutes, setDailyGoalMinutes] = useState(180);
@@ -60,7 +63,7 @@ export default function FocusApp() {
   const [showLogModal, setShowLogModal] = useState(false);
   const [autoContinue, setAutoContinue] = useState(true);
   const [workEndSoundId, setWorkEndSoundId] = useState(DEFAULT_WORK_END_SOUND);
-  const [breakEndSoundId, setBreakEndSoundId] = useState(DEFAULT_BREAK_END_SOUND);  
+  const [breakEndSoundId, setBreakEndSoundId] = useState(DEFAULT_BREAK_END_SOUND);
 
   const [eisenhower, setEisenhower] = useState([]); // {id,text,quadrant,done,notes,subtasks:[{id,text,done}]}
   const [planner, setPlanner] = useState({});
@@ -78,9 +81,9 @@ export default function FocusApp() {
   const storageApi = typeof window !== "undefined" && window.storage ? window.storage : localStorageAdapter;
   const deviceId = localStorage.getItem("deviceId") || (() => {
     const id = uid();
-    localStorage.setItem("deviceId", id); return id;
+    localStorage.setItem("deviceId", id);
+    return id;
   })();
-
 
   const flushQueuedWrites = useCallback(async () => {
     const pending = getQueuedWrites();
@@ -94,13 +97,13 @@ export default function FocusApp() {
     }
   }, [storageApi]);
 
-
+  // B. Load on startup
   useEffect(() => {
     (async () => {
       try {
-        const keys = ["tasks", "sessions", "durations", "theme", "themeName", "goal", "eisenhower", "planner", "whyText", "motivationLog", "compareDates", "challengesLog", "sleepSettings", "dayStartHour", "consistencyTasks", "autoContinue", "workEndSoundId", "breakEndSoundId"];
+        const keys = ["tasks", "sessions", "durations", "theme", "themeName", "goal", "eisenhower", "planner", "whyText", "motivationLog", "compareDates", "challengesLog", "sleepSettings", "dayStartHour", "consistencyTasks", "autoContinue", "workEndSoundId", "breakEndSoundId", "breakTasks"];
         const results = await Promise.allSettled(keys.map((k) => storageApi.get(k, false)));
-        const [t, s, c, th, tn, g, ei, pl, why, mo, cd, ch, sl, dsh, ct, ac, wes, bes] = results;
+        const [t, s, c, th, tn, g, ei, pl, why, mo, cd, ch, sl, dsh, ct, ac, wes, bes, bt] = results;
 
         if (t.status === "fulfilled" && t.value) setTasks(JSON.parse(t.value.value));
         if (s.status === "fulfilled" && s.value) setSessions(JSON.parse(s.value.value));
@@ -124,6 +127,7 @@ export default function FocusApp() {
         if (ac.status === "fulfilled" && ac.value) setAutoContinue(JSON.parse(ac.value.value));
         if (wes.status === "fulfilled" && wes.value) setWorkEndSoundId(JSON.parse(wes.value.value));
         if (bes.status === "fulfilled" && bes.value) setBreakEndSoundId(JSON.parse(bes.value.value));
+        if (bt && bt.status === "fulfilled" && bt.value) setBreakTasks(JSON.parse(bt.value.value));
       } catch (e) {
         console.error("Load error", e);
       } finally {
@@ -364,77 +368,30 @@ export default function FocusApp() {
     [storageApi]
   );
 
-  useEffect(() => {
-    if (loaded) persist("tasks", tasks);
-  }, [tasks, loaded, persist]);
+  useEffect(() => { if (loaded) persist("tasks", tasks); }, [tasks, loaded, persist]);
 
+  // C. Persist on change
   useEffect(() => {
-    if (loaded) persist("sessions", sessions);
-  }, [sessions, loaded, persist]);
+    if (loaded) persist("breakTasks", breakTasks);
+  }, [breakTasks, loaded, persist]);
 
-  useEffect(() => {
-    if (loaded) persist("durations", customDurations);
-  }, [customDurations, loaded, persist]);
-
-  useEffect(() => {
-    if (loaded) persist("theme", dark);
-  }, [dark, loaded, persist]);
-
-  useEffect(() => {
-    if (loaded) persist("themeName", themeName);
-  }, [themeName, loaded, persist]);
-
-  useEffect(() => {
-    if (loaded) persist("goal", dailyGoalMinutes);
-  }, [dailyGoalMinutes, loaded, persist]);
-
-  useEffect(() => {
-    if (loaded) persist("eisenhower", eisenhower);
-  }, [eisenhower, loaded, persist]);
-
-  useEffect(() => {
-    if (loaded) persist("planner", planner);
-  }, [planner, loaded, persist]);
-
-  useEffect(() => {
-    if (loaded) persist("whyText", whyText);
-  }, [whyText, loaded, persist]);
-
-  useEffect(() => {
-    if (loaded) persist("motivationLog", motivationLog);
-  }, [motivationLog, loaded, persist]);
-
-  useEffect(() => {
-    if (loaded) persist("compareDates", compareDates);
-  }, [compareDates, loaded, persist]);
-
-  useEffect(() => {
-    if (loaded) persist("challengesLog", challengesLog);
-  }, [challengesLog, loaded, persist]);
-
-  useEffect(() => {
-    if (loaded) persist("sleepSettings", sleepSettings);
-  }, [sleepSettings, loaded, persist]);
-
-  useEffect(() => {
-    if (loaded) persist("dayStartHour", dayStartHour);
-  }, [dayStartHour, loaded, persist]);
-
-  useEffect(() => {
-    if (loaded) persist("consistencyTasks", consistencyTasks);
-  }, [consistencyTasks, loaded, persist]);
-
-  useEffect(() => {
-    if (loaded) persist("autoContinue", autoContinue);
-  }, [autoContinue, loaded, persist]);
-
-  useEffect(() => {
-    if (loaded) persist("workEndSoundId", workEndSoundId);
-  }, [workEndSoundId, loaded, persist]);
-
-  useEffect(() => {
-    if (loaded) persist("breakEndSoundId", breakEndSoundId);
-  }, [breakEndSoundId, loaded, persist]);
+  useEffect(() => { if (loaded) persist("sessions", sessions); }, [sessions, loaded, persist]);
+  useEffect(() => { if (loaded) persist("durations", customDurations); }, [customDurations, loaded, persist]);
+  useEffect(() => { if (loaded) persist("theme", dark); }, [dark, loaded, persist]);
+  useEffect(() => { if (loaded) persist("themeName", themeName); }, [themeName, loaded, persist]);
+  useEffect(() => { if (loaded) persist("goal", dailyGoalMinutes); }, [dailyGoalMinutes, loaded, persist]);
+  useEffect(() => { if (loaded) persist("eisenhower", eisenhower); }, [eisenhower, loaded, persist]);
+  useEffect(() => { if (loaded) persist("planner", planner); }, [planner, loaded, persist]);
+  useEffect(() => { if (loaded) persist("whyText", whyText); }, [whyText, loaded, persist]);
+  useEffect(() => { if (loaded) persist("motivationLog", motivationLog); }, [motivationLog, loaded, persist]);
+  useEffect(() => { if (loaded) persist("compareDates", compareDates); }, [compareDates, loaded, persist]);
+  useEffect(() => { if (loaded) persist("challengesLog", challengesLog); }, [challengesLog, loaded, persist]);
+  useEffect(() => { if (loaded) persist("sleepSettings", sleepSettings); }, [sleepSettings, loaded, persist]);
+  useEffect(() => { if (loaded) persist("dayStartHour", dayStartHour); }, [dayStartHour, loaded, persist]);
+  useEffect(() => { if (loaded) persist("consistencyTasks", consistencyTasks); }, [consistencyTasks, loaded, persist]);
+  useEffect(() => { if (loaded) persist("autoContinue", autoContinue); }, [autoContinue, loaded, persist]);
+  useEffect(() => { if (loaded) persist("workEndSoundId", workEndSoundId); }, [workEndSoundId, loaded, persist]);
+  useEffect(() => { if (loaded) persist("breakEndSoundId", breakEndSoundId); }, [breakEndSoundId, loaded, persist]);
 
   useEffect(() => {
     if (!running) return;
@@ -458,11 +415,7 @@ export default function FocusApp() {
   }, [running, modeKey, phase]);
 
   function beep(justFinishedPhase) {
-    playSound(
-      justFinishedPhase === "work"
-        ? workEndSoundId
-        : breakEndSoundId
-    );
+    playSound(justFinishedPhase === "work" ? workEndSoundId : breakEndSoundId);
   }
 
   function logSession(minutes, mode, startDate, note, taskId) {
@@ -486,11 +439,9 @@ export default function FocusApp() {
   }
 
   function startPhaseAuto(nextPhase, forModeKey, durs) {
-    const durationMinutes =
-      nextPhase === "work" ? durs.work : durs.rest;
+    const durationMinutes = nextPhase === "work" ? durs.work : durs.rest;
 
-    const endTimestamp =
-      Date.now() + durationMinutes * 60 * 1000;
+    const endTimestamp = Date.now() + durationMinutes * 60 * 1000;
 
     sessionStartRef.current = Date.now();
     setPhase(nextPhase);
@@ -510,15 +461,9 @@ export default function FocusApp() {
     scheduleSessionEnd(
       TIMER_NOTIFICATION_ID,
       new Date(endTimestamp),
-      nextPhase === "work"
-        ? "Break's over"
-        : "Focus session complete",
-      nextPhase === "work"
-        ? "Back to work."
-        : "Nice work — time for a break.",
-      nextPhase === "work"
-        ? workEndSoundId
-        : breakEndSoundId
+      nextPhase === "work" ? "Break's over" : "Focus session complete",
+      nextPhase === "work" ? "Back to work." : "Nice work — time for a break.",
+      nextPhase === "work" ? workEndSoundId : breakEndSoundId
     );
   }
 
@@ -533,9 +478,7 @@ export default function FocusApp() {
       logSession(
         durs.work,
         modeKey,
-        sessionStartRef.current
-          ? new Date(sessionStartRef.current)
-          : new Date(),
+        sessionStartRef.current ? new Date(sessionStartRef.current) : new Date(),
         activeTask ? activeTask.text : "",
         activeTask ? activeTask.id : null
       );
@@ -615,8 +558,7 @@ export default function FocusApp() {
           stopwatchBaseSecs: stopwatchSecs
         });
       } else {
-        const endTimestamp =
-          Date.now() + secondsLeft * 1000;
+        const endTimestamp = Date.now() + secondsLeft * 1000;
 
         saveActiveTimer({
           modeKey,
@@ -631,15 +573,9 @@ export default function FocusApp() {
         scheduleSessionEnd(
           TIMER_NOTIFICATION_ID,
           new Date(endTimestamp),
-          phase === "work"
-            ? "Focus session complete"
-            : "Break's over",
-          phase === "work"
-            ? "Nice work — time for a break."
-            : "Ready to get back to it?",
-          phase === "work"
-            ? workEndSoundId
-            : breakEndSoundId
+          phase === "work" ? "Focus session complete" : "Break's over",
+          phase === "work" ? "Nice work — time for a break." : "Ready to get back to it?",
+          phase === "work" ? workEndSoundId : breakEndSoundId
         );
       }
     } else {
@@ -650,9 +586,7 @@ export default function FocusApp() {
 
       if (modeKey === "stopwatch") {
         if (stopwatchSecs > 0) {
-          const activeTask = tasks.find(
-            (tk) => tk.id === activeTaskId
-          );
+          const activeTask = tasks.find((tk) => tk.id === activeTaskId);
 
           logSession(
             Math.round(stopwatchSecs / 60),
@@ -697,16 +631,12 @@ export default function FocusApp() {
 
     if (modeKey === "stopwatch") {
       if (stopwatchSecs > 0) {
-        const activeTask = tasks.find(
-          (tk) => tk.id === activeTaskId
-        );
+        const activeTask = tasks.find((tk) => tk.id === activeTaskId);
 
         logSession(
           Math.round(stopwatchSecs / 60),
           "stopwatch",
-          sessionStartRef.current
-            ? new Date(sessionStartRef.current)
-            : new Date(),
+          sessionStartRef.current ? new Date(sessionStartRef.current) : new Date(),
           activeTask ? activeTask.text : "",
           activeTask?.id
         );
@@ -716,25 +646,16 @@ export default function FocusApp() {
       clearActiveTimer();
     } else {
       const durs = customDurations[modeKey];
-
-      const totalSecs =
-        (phase === "work" ? durs.work : durs.rest) * 60;
-
-      const elapsedMinutes = Math.round(
-        (totalSecs - secondsLeft) / 60
-      );
+      const totalSecs = (phase === "work" ? durs.work : durs.rest) * 60;
+      const elapsedMinutes = Math.round((totalSecs - secondsLeft) / 60);
 
       if (elapsedMinutes > 0 && phase === "work") {
-        const activeTask = tasks.find(
-          (tk) => tk.id === activeTaskId
-        );
+        const activeTask = tasks.find((tk) => tk.id === activeTaskId);
 
         logSession(
           elapsedMinutes,
           modeKey,
-          sessionStartRef.current
-            ? new Date(sessionStartRef.current)
-            : new Date(),
+          sessionStartRef.current ? new Date(sessionStartRef.current) : new Date(),
           activeTask ? activeTask.text : "",
           activeTask?.id
         );
@@ -781,24 +702,16 @@ export default function FocusApp() {
       clearActiveTimer();
     } else {
       const durs = customDurations[modeKey];
-      const totalSecs =
-        (phase === "work" ? durs.work : durs.rest) * 60;
-
-      const elapsedMinutes = Math.round(
-        (totalSecs - secondsLeft) / 60
-      );
+      const totalSecs = (phase === "work" ? durs.work : durs.rest) * 60;
+      const elapsedMinutes = Math.round((totalSecs - secondsLeft) / 60);
 
       if (elapsedMinutes > 0 && phase === "work") {
-        const activeTask = tasks.find(
-          (tk) => tk.id === activeTaskId
-        );
+        const activeTask = tasks.find((tk) => tk.id === activeTaskId);
 
         logSession(
           elapsedMinutes,
           modeKey,
-          sessionStartRef.current
-            ? new Date(sessionStartRef.current)
-            : new Date(),
+          sessionStartRef.current ? new Date(sessionStartRef.current) : new Date(),
           activeTask ? activeTask.text : "",
           activeTask?.id
         );
@@ -864,46 +777,39 @@ export default function FocusApp() {
   }
 
   function setTaskTarget(id, hours) {
-    setTasks((p) =>
-      p.map((tk) =>
-        tk.id === id ? { ...tk, targetHours: hours } : tk
-      )
-    );
+    setTasks((p) => p.map((tk) => tk.id === id ? { ...tk, targetHours: hours } : tk));
   }
 
   function toggleTask(id) {
-    setTasks((p) =>
-      p.map((tk) =>
-        tk.id === id ? { ...tk, done: !tk.done } : tk
-      )
-    );
+    setTasks((p) => p.map((tk) => tk.id === id ? { ...tk, done: !tk.done } : tk));
   }
 
   function removeTask(id) {
     setTasks((p) => p.filter((tk) => tk.id !== id));
-
     if (activeTaskId === id) {
       setActiveTaskId(null);
     }
   }
 
-  function addManualSession({
-    date,
-    startTime,
-    hours,
-    minutes,
-    note
-  }) {
-    const total = Math.round(
-      (Number(hours) || 0) * 60 +
-      (Number(minutes) || 0)
-    );
+  // D. New handler functions
+  function addBreakTask() {
+    const text = newBreakTask.trim();
+    if (!text) return;
+    setBreakTasks((p) => [...p, { id: uid(), text, done: false }]);
+    setNewBreakTask("");
+  }
+  function toggleBreakTask(id) {
+    setBreakTasks((p) => p.map((tk) => (tk.id === id ? { ...tk, done: !tk.done } : tk)));
+  }
+  function removeBreakTask(id) {
+    setBreakTasks((p) => p.filter((tk) => tk.id !== id));
+  }
 
+  function addManualSession({ date, startTime, hours, minutes, note }) {
+    const total = Math.round((Number(hours) || 0) * 60 + (Number(minutes) || 0));
     if (total <= 0) return;
 
-    const [h2, m2] = (startTime || "09:00")
-      .split(":")
-      .map(Number);
+    const [h2, m2] = (startTime || "09:00").split(":").map(Number);
 
     setSessions((prev) => [
       ...prev,
@@ -922,44 +828,19 @@ export default function FocusApp() {
   }
 
   const today = todayKey();
-
-  const totalToday = sessions
-    .filter((s) => s.date === today)
-    .reduce((a, s) => a + s.minutes, 0);
-
-  const totalAll = sessions.reduce(
-    (a, s) => a + s.minutes,
-    0
-  );
-
+  const totalToday = sessions.filter((s) => s.date === today).reduce((a, s) => a + s.minutes, 0);
+  const totalAll = sessions.reduce((a, s) => a + s.minutes, 0);
   const todayFocusedMinutes = totalToday;
-
   const todayMinutesByTaskId = tasks.reduce((acc, tk) => {
     acc[tk.id] = sessions
-      .filter(
-        (s) =>
-          s.date === today &&
-          s.taskId === tk.id
-      )
+      .filter((s) => s.date === today && s.taskId === tk.id)
       .reduce((a, s) => a + s.minutes, 0);
-
     return acc;
   }, {});
 
   const durs = customDurations[modeKey];
-
-  const inProgressMinutes =
-    modeKey === "stopwatch"
-      ? Math.round(stopwatchSecs / 60)
-      : phase === "work"
-        ? Math.round(
-            (durs.work * 60 - secondsLeft) / 60
-          )
-        : 0;
-
-  const sessionCountToday = sessions.filter(
-    (s) => s.date === today
-  ).length;
+  const inProgressMinutes = modeKey === "stopwatch" ? Math.round(stopwatchSecs / 60) : phase === "work" ? Math.round((durs.work * 60 - secondsLeft) / 60) : 0;
+  const sessionCountToday = sessions.filter((s) => s.date === today).length;
 
   function computeStreak() {
     let streak = 0;
@@ -970,14 +851,10 @@ export default function FocusApp() {
       const has = sessions.some((s) => s.date === key);
 
       if (!has) {
-        if (
-          streak === 0 &&
-          key === todayKey()
-        ) {
+        if (streak === 0 && key === todayKey()) {
           d = addDays(d, -1);
           continue;
         }
-
         break;
       }
 
@@ -989,121 +866,36 @@ export default function FocusApp() {
   }
 
   const streak = computeStreak();
-
   const palette = THEMES[themeName] || THEMES.sage;
-
   const t = dark
-    ? {
-        bg: "#1B1E1A",
-        surface: "#22261F",
-        surface2: "#282C24",
-        ink: "#E9E6DD",
-        sub: "#A7A99C",
-        moss: palette.mossD,
-        clay: palette.clayD,
-        line: "#33372E"
-      }
-    : {
-        bg: "#EDEAE3",
-        surface: "#F7F5F0",
-        surface2: "#F1EEE6",
-        ink: "#2B2A28",
-        sub: "#7C7A72",
-        moss: palette.moss,
-        clay: palette.clay,
-        line: "#D8D3C8"
-      };
+    ? { bg: "#1B1E1A", surface: "#22261F", surface2: "#282C24", ink: "#E9E6DD", sub: "#A7A99C", moss: palette.mossD, clay: palette.clayD, line: "#33372E" }
+    : { bg: "#EDEAE3", surface: "#F7F5F0", surface2: "#F1EEE6", ink: "#2B2A28", sub: "#7C7A72", moss: palette.moss, clay: palette.clay, line: "#D8D3C8" };
 
-  const durationTotal =
-    modeKey === "stopwatch"
-      ? null
-      : customDurations[modeKey][
-          phase === "work" ? "work" : "rest"
-        ] * 60;
-
-  const progress =
-    modeKey === "stopwatch"
-      ? 0
-      : 1 - secondsLeft / durationTotal;
+  const durationTotal = modeKey === "stopwatch" ? null : customDurations[modeKey][phase === "work" ? "work" : "rest"] * 60;
+  const progress = modeKey === "stopwatch" ? 0 : 1 - secondsLeft / durationTotal;
 
   const R = 120;
   const CIRC = 2 * Math.PI * R;
 
   if (!loaded) {
     return (
-      <div
-        style={{
-          minHeight: 400,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          background: t.bg,
-          fontFamily: "system-ui"
-        }}
-      >
-        <span
-          style={{
-            color: t.sub,
-            fontSize: 14
-          }}
-        >
-          Loading your focus data…
-        </span>
+      <div style={{ minHeight: 400, display: "flex", alignItems: "center", justifyContent: "center", background: t.bg, fontFamily: "system-ui" }}>
+        <span style={{ color: t.sub, fontSize: 14 }}>Loading your focus data…</span>
       </div>
     );
   }
 
   const NAV = [
-    {
-      key: "timer",
-      icon: TimerIcon,
-      label: "Timer"
-    },
-    {
-      key: "planner",
-      icon: CalendarDays,
-      label: "Planner"
-    },
-    {
-      key: "matrix",
-      icon: Grid2x2,
-      label: "Matrix"
-    },
-    {
-      key: "progress",
-      icon: BarChart3,
-      label: "Progress"
-    },
-    {
-      key: "motivation",
-      icon: Heart,
-      label: "Why"
-    }
+    { key: "timer", icon: TimerIcon, label: "Timer" },
+    { key: "planner", icon: CalendarDays, label: "Planner" },
+    { key: "matrix", icon: Grid2x2, label: "Matrix" },
+    { key: "progress", icon: BarChart3, label: "Progress" },
+    { key: "motivation", icon: Heart, label: "Why" }
   ];
 
   return (
-    <div
-      style={{
-        fontFamily: "system-ui",
-        display: "flex",
-        justifyContent: "center",
-        padding: "0 4px",
-        height: "100%"
-      }}
-    >
-      <style>{`
-        * { box-sizing: border-box; }
-        html, body, #root { margin: 0; height: 100%; overflow: hidden; }
-        .sf-page { height: 100%; }
-        .sf-scroll::-webkit-scrollbar { height: 6px; width: 6px; }
-        .sf-scroll::-webkit-scrollbar-thumb { background: ${t.line}; border-radius: 4px; }
-        input[type="date"], input[type="time"] { color-scheme: ${dark ? "dark" : "light"}; }
-        @media (max-width: 420px) {
-          .sf-navlabel { font-size: 9.5px !important; }
-          .sf-title { font-size: 18px !important; }
-        }
-      `}</style>
-
+    <div style={{ fontFamily: "system-ui", display: "flex", justifyContent: "center", padding: "0 4px", height: "100%" }}>
+      <style>{`* { box-sizing: border-box; } html, body, #root { margin: 0; height: 100%; overflow: hidden; } .sf-page { height: 100%; } .sf-scroll::-webkit-scrollbar { height: 6px; width: 6px; } .sf-scroll::-webkit-scrollbar-thumb { background: ${t.line}; border-radius: 4px; } input[type="date"], input[type="time"] { color-scheme: ${dark ? "dark" : "light"}; } @media (max-width: 420px) { .sf-navlabel { font-size: 9.5px !important; } .sf-title { font-size: 18px !important; } }`}</style>
       <div
         className="sf-page"
         style={{
@@ -1112,13 +904,10 @@ export default function FocusApp() {
           minWidth: 0,
           background: t.bg,
           color: t.ink,
-          fontFamily:
-            "'Iowan Old Style','Palatino Linotype',Georgia,serif",
+          fontFamily: "'Iowan Old Style','Palatino Linotype',Georgia,serif",
           borderRadius: 20,
           overflow: "hidden",
-          boxShadow: dark
-            ? "0 20px 60px rgba(0,0,0,0.5)"
-            : "0 20px 60px rgba(43,42,40,0.12)",
+          boxShadow: dark ? "0 20px 60px rgba(0,0,0,0.5)" : "0 20px 60px rgba(43,42,40,0.12)",
           position: "relative",
           display: "flex",
           flexDirection: "column"
@@ -1133,97 +922,43 @@ export default function FocusApp() {
             flexShrink: 0
           }}
         >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "baseline",
-              gap: 8
-            }}
-          >
-            <span
-              className="sf-title"
-              style={{
-                fontSize: 20,
-                fontWeight: 600,
-                letterSpacing: "0.02em"
-              }}
-            >
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            <span className="sf-title" style={{ fontSize: 20, fontWeight: 600, letterSpacing: "0.02em" }}>
               Still
             </span>
-
-            <span
-              style={{
-                fontSize: 12,
-                color: t.sub,
-                fontFamily: "system-ui",
-                letterSpacing: "0.08em",
-                textTransform: "uppercase"
-              }}
-            >
+            <span style={{ fontSize: 12, color: t.sub, fontFamily: "system-ui", letterSpacing: "0.08em", textTransform: "uppercase" }}>
               focus
             </span>
           </div>
 
-          <div
-            style={{
-              display: "flex",
-              gap: 4
-            }}
-          >
+          <div style={{ display: "flex", gap: 4 }}>
             <button
               onClick={() => setScreen("settings")}
-              style={{
-                background: "none",
-                border: "none",
-                color:
-                  screen === "settings"
-                    ? t.moss
-                    : t.sub,
-                cursor: "pointer",
-                padding: 6,
-                display: "flex"
-              }}
+              style={{ background: "none", border: "none", color: screen === "settings" ? t.moss : t.sub, cursor: "pointer", padding: 6, display: "flex" }}
               aria-label="Settings"
             >
               <SettingsIcon size={17} />
             </button>
-
             <button
               onClick={() => setDark((d) => !d)}
-              style={{
-                background: "none",
-                border: "none",
-                color: t.sub,
-                cursor: "pointer",
-                padding: 6,
-                display: "flex"
-              }}
+              style={{ background: "none", border: "none", color: t.sub, cursor: "pointer", padding: 6, display: "flex" }}
               aria-label="Toggle theme"
             >
-              {dark ? (
-                <Sun size={17} />
-              ) : (
-                <Moon size={17} />
-              )}
+              {dark ? <Sun size={17} /> : <Moon size={17} />}
             </button>
           </div>
         </div>
 
         <div
           className="sf-scroll"
-          style={{
-            padding: "6px 22px 22px",
-            fontFamily: "system-ui",
-            flex: 1,
-            minHeight: 0,
-            overflow: "auto"
-          }}
+          style={{ padding: "6px 22px 22px", fontFamily: "system-ui", flex: 1, minHeight: 0, overflow: "auto" }}
         >
+          {/* E. Pass props down */}
           {screen === "timer" && (
             <TimerScreen
               t={t}
               modeKey={modeKey}
-              customDurations={customDurations} 
+              customDurations={customDurations}
               switchMode={switchMode}
               phase={phase}
               running={running}
@@ -1247,6 +982,12 @@ export default function FocusApp() {
               todayFocusedMinutes={todayFocusedMinutes}
               todayMinutesByTaskId={todayMinutesByTaskId}
               inProgressMinutes={inProgressMinutes}
+              breakTasks={breakTasks}
+              newBreakTask={newBreakTask}
+              setNewBreakTask={setNewBreakTask}
+              addBreakTask={addBreakTask}
+              toggleBreakTask={toggleBreakTask}
+              removeBreakTask={removeBreakTask}
             />
           )}
 
@@ -1353,18 +1094,8 @@ export default function FocusApp() {
                 minWidth: 0
               }}
             >
-              <Icon
-                size={17}
-                strokeWidth={screen === key ? 2.4 : 1.8}
-              />
-
-              <span
-                className="sf-navlabel"
-                style={{
-                  fontSize: 10.5,
-                  letterSpacing: "0.01em"
-                }}
-              >
+              <Icon size={17} strokeWidth={screen === key ? 2.4 : 1.8} />
+              <span className="sf-navlabel" style={{ fontSize: 10.5, letterSpacing: "0.01em" }}>
                 {label}
               </span>
             </button>
