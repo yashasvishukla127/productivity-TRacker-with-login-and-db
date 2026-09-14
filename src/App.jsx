@@ -14,7 +14,25 @@ import SettingsScreen from "./components/SettingsScreen";
 import LogTimeModal from "./components/LogTimeModal";
 import { saveActiveTimer, loadActiveTimer, clearActiveTimer, remainingFromEnd, elapsedStopwatch, resolveElapsedPhases } from "./lib/timerEngine";
 import { initNotifications, scheduleSessionEnd, cancelSessionEnd, TIMER_NOTIFICATION_ID } from "./lib/notifications";
-import { queueWrite, getQueuedWrites, clearQueuedWrite } from "./lib/offlineQueue";
+import { getQueuedWrites, clearQueuedWrite, queueWrite } from "./lib/offlineQueue";
+
+
+function readCache(key) {
+  try {
+    const raw = window.localStorage.getItem("cache:" + key);
+    return raw ? { value: raw } : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(key, value) {
+  try {
+    window.localStorage.setItem("cache:" + key, value);
+  } catch {
+    // ignore — best effort only
+  }
+}
 
 const localStorageAdapter = {
   async get(key) {
@@ -79,61 +97,29 @@ export default function FocusApp() {
   const stoppingRef = useRef(false);
 
   const storageApi = typeof window !== "undefined" && window.storage ? window.storage : localStorageAdapter;
+  const sessionsApi = typeof window !== "undefined" && window.sessionsAdapter ? window.sessionsAdapter : null;
   const deviceId = localStorage.getItem("deviceId") || (() => {
     const id = uid();
     localStorage.setItem("deviceId", id);
     return id;
   })();
 
-  // 1. Setter lookup + merge helper
-  const MERGE_SETTERS = { tasks: setTasks, sessions: setSessions, consistencyTasks: setConsistencyTasks };
-
-  function mergeById(serverArr, localArr) {
-    const map = new Map();
-    (serverArr || []).forEach((item) => map.set(item.id, item));
-    (localArr || []).forEach((item) => map.set(item.id, item)); // local wins on same id
-    return Array.from(map.values());
-  }
-
-  // 2. Save mechanism: saveKey + persist wrapper
-  const saveKey = useCallback(
-    async (key, value) => {
-      try {
-        let toSave = value;
-        if (MERGE_SETTERS[key]) {
-          const serverRes = await storageApi.get(key, false);
-          const serverValue = serverRes ? JSON.parse(serverRes.value) : [];
-          const merged = mergeById(serverValue, value);
-          toSave = merged;
-          const localIds = new Set((value || []).map((i) => i.id));
-          const hasNewFromServer = merged.some((i) => !localIds.has(i.id));
-          if (hasNewFromServer) MERGE_SETTERS[key](merged); // reflect newly-recovered items in UI
-        }
-        await storageApi.set(key, JSON.stringify(toSave), false);
-        clearQueuedWrite(key);
-      } catch (e) {
-        console.error("Save error", e);
-        queueWrite(key, value);
-      }
-    },
-    [storageApi]
-  );
-
-  const persist = useCallback(
-    (key, value) => {
-      clearTimeout(saveTimeout.current[key]);
-      saveTimeout.current[key] = setTimeout(() => saveKey(key, value), 300);
-    },
-    [saveKey]
-  );
-
-  // 3. Flush queued writes using saveKey
   const flushQueuedWrites = useCallback(async () => {
     const pending = getQueuedWrites();
     for (const [key, value] of Object.entries(pending)) {
-      await saveKey(key, value);
+      try {
+        if (key.startsWith("session:")) {
+          if (!sessionsApi) throw new Error("not signed in yet");
+          await sessionsApi.upsertSession(value);
+        } else {
+          await storageApi.set(key, JSON.stringify(value), false);
+        }
+        clearQueuedWrite(key);
+      } catch (e) {
+        // still offline (or Supabase still unreachable) — leave it queued, try again next time
+      }
     }
-  }, [saveKey]);
+  }, [storageApi, sessionsApi]);
 
   // B. Load on startup
   useEffect(() => {
@@ -178,9 +164,16 @@ export default function FocusApp() {
   }, [storageApi, flushQueuedWrites]);
 
   useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState === "visible") flushQueuedWrites();
+    }
     window.addEventListener("online", flushQueuedWrites);
-    return () => window.removeEventListener("online", flushQueuedWrites);
-  }, [storageApi, flushQueuedWrites]);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("online", flushQueuedWrites);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [storageApi, sessionsApi, flushQueuedWrites]);
 
   // Resume an in-progress timer after the app was backgrounded/killed and
   // reopened, by recomputing from stored wall-clock timestamps instead of
@@ -389,6 +382,23 @@ export default function FocusApp() {
     return () => document.removeEventListener("visibilitychange", onVisible);
   });
 
+  const persist = useCallback(
+    (key, value) => {
+      clearTimeout(saveTimeout.current[key]);
+
+      saveTimeout.current[key] = setTimeout(async () => {
+        try {
+          await storageApi.set(key, JSON.stringify(value), false);
+          clearQueuedWrite(key);
+        } catch (e) {
+          console.error("Save error", e);
+          queueWrite(key, value);
+        }
+      }, 300);
+    },
+    [storageApi]
+  );
+
   useEffect(() => { if (loaded) persist("tasks", tasks); }, [tasks, loaded, persist]);
 
   // C. Persist on change
@@ -396,8 +406,7 @@ export default function FocusApp() {
     if (loaded) persist("breakTasks", breakTasks);
   }, [breakTasks, loaded, persist]);
 
-  useEffect(() => { if (loaded) persist("sessions", sessions); }, [sessions, loaded, persist]);
-  useEffect(() => { if (loaded) persist("durations", customDurations); }, [customDurations, loaded, persist]);
+    useEffect(() => { if (loaded) persist("durations", customDurations); }, [customDurations, loaded, persist]);
   useEffect(() => { if (loaded) persist("theme", dark); }, [dark, loaded, persist]);
   useEffect(() => { if (loaded) persist("themeName", themeName); }, [themeName, loaded, persist]);
   useEffect(() => { if (loaded) persist("goal", dailyGoalMinutes); }, [dailyGoalMinutes, loaded, persist]);
@@ -443,21 +452,38 @@ export default function FocusApp() {
     if (minutes <= 0) return;
 
     const sd = startDate || new Date();
+    const newSession = {
+      id: uid(),
+      date: todayKey(sd),
+      startMinutes: minutesSinceMidnight(sd),
+      minutes,
+      mode,
+      manual: false,
+      note: note || "",
+      taskId: taskId || null
+    };
 
-    setSessions((prev) => [
-      ...prev,
-      {
-        id: uid(),
-        date: todayKey(sd),
-        startMinutes: minutesSinceMidnight(sd),
-        minutes,
-        mode,
-        manual: false,
-        note: note || "",
-        taskId: taskId || null
-      }
-    ]);
+    setSessions((prev) => {
+      const next = [...prev, newSession];
+      writeCache("sessions", JSON.stringify(next));
+      return next;
+    });
+
+    persistSession(newSession);
   }
+
+  const persistSession = useCallback(
+    async (session) => {
+      try {
+        if (!sessionsApi) throw new Error("not signed in yet");
+        await sessionsApi.upsertSession(session);
+        clearQueuedWrite("session:" + session.id);
+      } catch (e) {
+        queueWrite("session:" + session.id, session);
+      }
+    },
+    [sessionsApi]
+  );
 
   function startPhaseAuto(nextPhase, forModeKey, durs) {
     const durationMinutes = nextPhase === "work" ? durs.work : durs.rest;
@@ -616,6 +642,9 @@ export default function FocusApp() {
             activeTask ? activeTask.text : "",
             activeTask?.id
           );
+
+          setStopwatchSecs(0);
+          sessionStartRef.current = Date.now();
         }
 
         saveActiveTimer({
@@ -625,7 +654,7 @@ export default function FocusApp() {
           endTimestamp: null,
           remainingSeconds: null,
           stopwatchStartTimestamp: null,
-          stopwatchBaseSecs: stopwatchSecs
+          stopwatchBaseSecs: 0
         });
       } else {
         saveActiveTimer({

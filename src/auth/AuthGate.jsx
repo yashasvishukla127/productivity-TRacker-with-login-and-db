@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
-import { createSupabaseStorageAdapter } from "../lib/supabaseStorageAdapter";
+import { createSupabaseStorageAdapter, createSessionsAdapter } from "../lib/supabaseStorageAdapter";
 import AuthScreen from "./AuthScreen";
 
 export default function AuthGate({ children }) {
@@ -22,9 +22,11 @@ export default function AuthGate({ children }) {
   useEffect(() => {
     if (session?.user) {
       window.storage = createSupabaseStorageAdapter(session.user.id);
+      window.sessionsAdapter = createSessionsAdapter(session.user.id);
       setStorageReady(true);
     } else {
       delete window.storage;
+      delete window.sessionsAdapter;
       setStorageReady(false);
     }
   }, [session?.user?.id]);

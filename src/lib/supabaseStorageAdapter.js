@@ -19,7 +19,7 @@ export function createSupabaseStorageAdapter(userId) {
 
       if (error) {
         console.error("Storage get failed", key, error);
-        return null;
+        throw error;
       }
       if (!data) return null;
       // value is stored as jsonb; the app expects a JSON *string* back
@@ -45,7 +45,7 @@ export function createSupabaseStorageAdapter(userId) {
 
       if (error) {
         console.error("Storage set failed", key, error);
-        return null;
+        throw error;
       }
       return { key, value, shared };
     },
@@ -59,7 +59,7 @@ export function createSupabaseStorageAdapter(userId) {
         .eq("shared", shared);
       if (error) {
         console.error("Storage delete failed", key, error);
-        return null;
+        throw error;
       }
       return { key, deleted: true, shared };
     },
@@ -77,6 +77,29 @@ export function createSupabaseStorageAdapter(userId) {
         return null;
       }
       return { keys: data.map((r) => r.key), prefix, shared };
+    },
+  };
+}
+export function createSessionsAdapter(userId) {
+  return {
+    async upsertSession(session) {
+      const { error } = await supabase.from("sessions").upsert({
+        id: session.id,
+        user_id: userId,
+        date: session.date,
+        start_minutes: session.startMinutes,
+        minutes: session.minutes,
+        mode: session.mode,
+        manual: session.manual,
+        note: session.note,
+        task_id: session.taskId,
+      });
+      if (error) throw error;
+    },
+    async listSessions() {
+      const { data, error } = await supabase.from("sessions").select("*").eq("user_id", userId);
+      if (error) throw error;
+      return data.map((r) => ({ id: r.id, date: r.date, startMinutes: r.start_minutes, minutes: r.minutes, mode: r.mode, manual: r.manual, note: r.note, taskId: r.task_id }));
     },
   };
 }

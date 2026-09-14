@@ -1,5 +1,8 @@
-npm install
-npm run dev
+# ============================================================
+# ANDROID BUILD — QUICK CHEAT SHEET
+# Project: ProductivityApp
+# Use this whenever you open a NEW PowerShell terminal
+# ============================================================
 
 # 1. Go to Android project
 cd "D:\ai engineering\Agentic_ai_architect_journey\ProductivityApp- db\android"
@@ -61,8 +64,8 @@ java -version
 # Gradle:          8.14.3
 # Android Gradle:  8.13.0
 # JDK:             21.0.12
-
-
+#
+# ============================================================
 
 
 # ============================================================
