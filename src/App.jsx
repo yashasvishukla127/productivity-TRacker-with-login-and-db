@@ -14,7 +14,7 @@ import SettingsScreen from "./components/SettingsScreen";
 import LogTimeModal from "./components/LogTimeModal";
 import { saveActiveTimer, loadActiveTimer, clearActiveTimer, remainingFromEnd, elapsedStopwatch, resolveElapsedPhases } from "./lib/timerEngine";
 import { initNotifications, scheduleSessionEnd, cancelSessionEnd, TIMER_NOTIFICATION_ID } from "./lib/notifications";
-import { getQueuedWrites, clearQueuedWrite } from "./lib/offlineQueue";
+import { queueWrite, getQueuedWrites, clearQueuedWrite } from "./lib/offlineQueue";
 
 const localStorageAdapter = {
   async get(key) {
@@ -85,17 +85,55 @@ export default function FocusApp() {
     return id;
   })();
 
+  // 1. Setter lookup + merge helper
+  const MERGE_SETTERS = { tasks: setTasks, sessions: setSessions, consistencyTasks: setConsistencyTasks };
+
+  function mergeById(serverArr, localArr) {
+    const map = new Map();
+    (serverArr || []).forEach((item) => map.set(item.id, item));
+    (localArr || []).forEach((item) => map.set(item.id, item)); // local wins on same id
+    return Array.from(map.values());
+  }
+
+  // 2. Save mechanism: saveKey + persist wrapper
+  const saveKey = useCallback(
+    async (key, value) => {
+      try {
+        let toSave = value;
+        if (MERGE_SETTERS[key]) {
+          const serverRes = await storageApi.get(key, false);
+          const serverValue = serverRes ? JSON.parse(serverRes.value) : [];
+          const merged = mergeById(serverValue, value);
+          toSave = merged;
+          const localIds = new Set((value || []).map((i) => i.id));
+          const hasNewFromServer = merged.some((i) => !localIds.has(i.id));
+          if (hasNewFromServer) MERGE_SETTERS[key](merged); // reflect newly-recovered items in UI
+        }
+        await storageApi.set(key, JSON.stringify(toSave), false);
+        clearQueuedWrite(key);
+      } catch (e) {
+        console.error("Save error", e);
+        queueWrite(key, value);
+      }
+    },
+    [storageApi]
+  );
+
+  const persist = useCallback(
+    (key, value) => {
+      clearTimeout(saveTimeout.current[key]);
+      saveTimeout.current[key] = setTimeout(() => saveKey(key, value), 300);
+    },
+    [saveKey]
+  );
+
+  // 3. Flush queued writes using saveKey
   const flushQueuedWrites = useCallback(async () => {
     const pending = getQueuedWrites();
     for (const [key, value] of Object.entries(pending)) {
-      try {
-        await storageApi.set(key, JSON.stringify(value), false);
-        clearQueuedWrite(key);
-      } catch (e) {
-        // still offline (or Supabase still unreachable) — leave it queued, try again next time
-      }
+      await saveKey(key, value);
     }
-  }, [storageApi]);
+  }, [saveKey]);
 
   // B. Load on startup
   useEffect(() => {
@@ -350,23 +388,6 @@ export default function FocusApp() {
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
   });
-
-  const persist = useCallback(
-    (key, value) => {
-      clearTimeout(saveTimeout.current[key]);
-
-      saveTimeout.current[key] = setTimeout(async () => {
-        try {
-          await storageApi.set(key, JSON.stringify(value), false);
-          clearQueuedWrite(key);
-        } catch (e) {
-          console.error("Save error", e);
-          queueWrite(key, value);
-        }
-      }, 300);
-    },
-    [storageApi]
-  );
 
   useEffect(() => { if (loaded) persist("tasks", tasks); }, [tasks, loaded, persist]);
 
