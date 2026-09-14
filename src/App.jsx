@@ -14,25 +14,7 @@ import SettingsScreen from "./components/SettingsScreen";
 import LogTimeModal from "./components/LogTimeModal";
 import { saveActiveTimer, loadActiveTimer, clearActiveTimer, remainingFromEnd, elapsedStopwatch, resolveElapsedPhases } from "./lib/timerEngine";
 import { initNotifications, scheduleSessionEnd, cancelSessionEnd, TIMER_NOTIFICATION_ID } from "./lib/notifications";
-import { getQueuedWrites, clearQueuedWrite, queueWrite } from "./lib/offlineQueue";
-
-
-function readCache(key) {
-  try {
-    const raw = window.localStorage.getItem("cache:" + key);
-    return raw ? { value: raw } : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeCache(key, value) {
-  try {
-    window.localStorage.setItem("cache:" + key, value);
-  } catch {
-    // ignore — best effort only
-  }
-}
+import { getQueuedWrites, clearQueuedWrite } from "./lib/offlineQueue";
 
 const localStorageAdapter = {
   async get(key) {
@@ -97,7 +79,6 @@ export default function FocusApp() {
   const stoppingRef = useRef(false);
 
   const storageApi = typeof window !== "undefined" && window.storage ? window.storage : localStorageAdapter;
-  const sessionsApi = typeof window !== "undefined" && window.sessionsAdapter ? window.sessionsAdapter : null;
   const deviceId = localStorage.getItem("deviceId") || (() => {
     const id = uid();
     localStorage.setItem("deviceId", id);
@@ -108,26 +89,21 @@ export default function FocusApp() {
     const pending = getQueuedWrites();
     for (const [key, value] of Object.entries(pending)) {
       try {
-        if (key.startsWith("session:")) {
-          if (!sessionsApi) throw new Error("not signed in yet");
-          await sessionsApi.upsertSession(value);
-        } else {
-          await storageApi.set(key, JSON.stringify(value), false);
-        }
+        await storageApi.set(key, JSON.stringify(value), false);
         clearQueuedWrite(key);
       } catch (e) {
         // still offline (or Supabase still unreachable) — leave it queued, try again next time
       }
     }
-  }, [storageApi, sessionsApi]);
+  }, [storageApi]);
 
   // B. Load on startup
   useEffect(() => {
     (async () => {
       try {
-        const keys = ["tasks", "sessions", "durations", "theme", "themeName", "goal", "eisenhower", "planner", "whyText", "motivationLog", "compareDates", "challengesLog", "sleepSettings", "dayStartHour", "consistencyTasks", "autoContinue", "workEndSoundId", "breakEndSoundId", "breakTasks"];
+        const keys = ["tasks", "sessions", "durations", "theme", "themeName", "goal", "eisenhower", "planner", "whyText", "motivationLog", "compareDates", "challengesLog", "sleepSettings", "dayStartHour", "consistencyTasks", "autoContinue", "workEndSoundId", "breakEndSoundId", "breakTasks", "activeTaskId"];
         const results = await Promise.allSettled(keys.map((k) => storageApi.get(k, false)));
-        const [t, s, c, th, tn, g, ei, pl, why, mo, cd, ch, sl, dsh, ct, ac, wes, bes, bt] = results;
+        const [t, s, c, th, tn, g, ei, pl, why, mo, cd, ch, sl, dsh, ct, ac, wes, bes, bt, atid] = results;
 
         if (t.status === "fulfilled" && t.value) setTasks(JSON.parse(t.value.value));
         if (s.status === "fulfilled" && s.value) setSessions(JSON.parse(s.value.value));
@@ -152,6 +128,7 @@ export default function FocusApp() {
         if (wes.status === "fulfilled" && wes.value) setWorkEndSoundId(JSON.parse(wes.value.value));
         if (bes.status === "fulfilled" && bes.value) setBreakEndSoundId(JSON.parse(bes.value.value));
         if (bt && bt.status === "fulfilled" && bt.value) setBreakTasks(JSON.parse(bt.value.value));
+        if (atid && atid.status === "fulfilled" && atid.value) setActiveTaskId(JSON.parse(atid.value.value));
       } catch (e) {
         console.error("Load error", e);
       } finally {
@@ -164,16 +141,9 @@ export default function FocusApp() {
   }, [storageApi, flushQueuedWrites]);
 
   useEffect(() => {
-    function onVisible() {
-      if (document.visibilityState === "visible") flushQueuedWrites();
-    }
     window.addEventListener("online", flushQueuedWrites);
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.removeEventListener("online", flushQueuedWrites);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [storageApi, sessionsApi, flushQueuedWrites]);
+    return () => window.removeEventListener("online", flushQueuedWrites);
+  }, [storageApi, flushQueuedWrites]);
 
   // Resume an in-progress timer after the app was backgrounded/killed and
   // reopened, by recomputing from stored wall-clock timestamps instead of
@@ -380,7 +350,7 @@ export default function FocusApp() {
 
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
-  });
+  }, [running, modeKey, phase, customDurations, activeTaskId, autoContinue, workEndSoundId, breakEndSoundId]);
 
   const persist = useCallback(
     (key, value) => {
@@ -406,7 +376,9 @@ export default function FocusApp() {
     if (loaded) persist("breakTasks", breakTasks);
   }, [breakTasks, loaded, persist]);
 
-    useEffect(() => { if (loaded) persist("durations", customDurations); }, [customDurations, loaded, persist]);
+  useEffect(() => { if (loaded) persist("sessions", sessions); }, [sessions, loaded, persist]);
+  useEffect(() => { if (loaded) persist("activeTaskId", activeTaskId); }, [activeTaskId, loaded, persist]);
+  useEffect(() => { if (loaded) persist("durations", customDurations); }, [customDurations, loaded, persist]);
   useEffect(() => { if (loaded) persist("theme", dark); }, [dark, loaded, persist]);
   useEffect(() => { if (loaded) persist("themeName", themeName); }, [themeName, loaded, persist]);
   useEffect(() => { if (loaded) persist("goal", dailyGoalMinutes); }, [dailyGoalMinutes, loaded, persist]);
@@ -452,38 +424,21 @@ export default function FocusApp() {
     if (minutes <= 0) return;
 
     const sd = startDate || new Date();
-    const newSession = {
-      id: uid(),
-      date: todayKey(sd),
-      startMinutes: minutesSinceMidnight(sd),
-      minutes,
-      mode,
-      manual: false,
-      note: note || "",
-      taskId: taskId || null
-    };
 
-    setSessions((prev) => {
-      const next = [...prev, newSession];
-      writeCache("sessions", JSON.stringify(next));
-      return next;
-    });
-
-    persistSession(newSession);
-  }
-
-  const persistSession = useCallback(
-    async (session) => {
-      try {
-        if (!sessionsApi) throw new Error("not signed in yet");
-        await sessionsApi.upsertSession(session);
-        clearQueuedWrite("session:" + session.id);
-      } catch (e) {
-        queueWrite("session:" + session.id, session);
+    setSessions((prev) => [
+      ...prev,
+      {
+        id: uid(),
+        date: todayKey(sd),
+        startMinutes: minutesSinceMidnight(sd),
+        minutes,
+        mode,
+        manual: false,
+        note: note || "",
+        taskId: taskId || null
       }
-    },
-    [sessionsApi]
-  );
+    ]);
+  }
 
   function startPhaseAuto(nextPhase, forModeKey, durs) {
     const durationMinutes = nextPhase === "work" ? durs.work : durs.rest;
@@ -642,9 +597,6 @@ export default function FocusApp() {
             activeTask ? activeTask.text : "",
             activeTask?.id
           );
-
-          setStopwatchSecs(0);
-          sessionStartRef.current = Date.now();
         }
 
         saveActiveTimer({
@@ -654,7 +606,7 @@ export default function FocusApp() {
           endTimestamp: null,
           remainingSeconds: null,
           stopwatchStartTimestamp: null,
-          stopwatchBaseSecs: 0
+          stopwatchBaseSecs: stopwatchSecs
         });
       } else {
         saveActiveTimer({
@@ -860,23 +812,25 @@ export default function FocusApp() {
     if (total <= 0) return;
 
     const [h2, m2] = (startTime || "09:00").split(":").map(Number);
+    const newSession = {
+      id: uid(),
+      date,
+      startMinutes: h2 * 60 + m2,
+      minutes: total,
+      mode: "manual",
+      manual: true,
+      note: note || ""
+  };
 
-    setSessions((prev) => [
-      ...prev,
-      {
-        id: uid(),
-        date,
-        startMinutes: h2 * 60 + m2,
-        minutes: total,
-        mode: "manual",
-        manual: true,
-        note: note || ""
-      }
-    ]);
+  setSessions((prev) => {
+    const next = [...prev, newSession];
+    writeCache("sessions", JSON.stringify(next));
+    return next;
+  });
 
-    setShowLogModal(false);
-  }
-
+  persistSession(newSession);
+  setShowLogModal(false);
+}
   const today = todayKey();
   const totalToday = sessions.filter((s) => s.date === today).reduce((a, s) => a + s.minutes, 0);
   const totalAll = sessions.reduce((a, s) => a + s.minutes, 0);
