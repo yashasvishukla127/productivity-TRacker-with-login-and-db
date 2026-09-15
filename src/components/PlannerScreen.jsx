@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Check } from "lucide-react";
 import { todayKey, mondayOf, addDays, resolveRow, slotLabel, isSleepText } from "../utils/dates";
-import { SLEEP_COLOR } from "../theme";
+import { SLEEP_COLOR, taskColor } from "../theme";
 import PlannerCellEditor from "./PlannerCellEditor";
 import ConsistencySection from "./ConsistencySection";
 
@@ -14,15 +14,23 @@ const IS_TOUCH = typeof window !== "undefined" && ("ontouchstart" in window || n
 /* ── helpers ── */
 function colIndex(dayIdx, type) { return 2 + dayIdx * 2 + (type === "doing" ? 1 : 0); }
 
-function buildColumnRuns(anchorDate, type, planner, dayStartHour) {
+function getSlotValues(anchorDate, type, planner, dayStartHour) {
+  const vals = [];
+  for (let row = 0; row < 48; row++) {
+    const { slotIdx, date } = resolveRow(anchorDate, row, dayStartHour);
+    vals.push(planner[`${todayKey(date)}|${slotLabel(slotIdx)}|${type}`] || "");
+  }
+  return vals;
+}
+
+function buildRunsFromValues(vals) {
   const runs = [];
-  const keyAt = (row) => { const { slotIdx, date } = resolveRow(anchorDate, row, dayStartHour); return `${todayKey(date)}|${slotLabel(slotIdx)}|${type}`; };
   let i = 0;
   while (i < 48) {
-    const val = planner[keyAt(i)] || "";
+    const val = vals[i] || "";
     if (!val) { runs.push({ start: i, end: i, text: "" }); i++; continue; }
     let j = i;
-    while (j + 1 < 48 && (planner[keyAt(j + 1)] || "") === val) j++;
+    while (j + 1 < 48 && (vals[j + 1] || "") === val) j++;
     runs.push({ start: i, end: j, text: val });
     i = j + 1;
   }
@@ -51,9 +59,12 @@ export default function PlannerScreen({ t, planner, setPlanner, eisenhower, dayS
   /* ── build all column runs & compressed-row set ── */
   const allColumnRuns = [];
   days.forEach((d, dayIdx) => {
-    ["planned", "doing"].forEach((type) => {
-      allColumnRuns.push({ dayIdx, type, date: d, runs: buildColumnRuns(d, type, planner, dayStartHour) });
-    });
+    const plannedVals = getSlotValues(d, "planned", planner, dayStartHour);
+    const doingVals = getSlotValues(d, "doing", planner, dayStartHour);
+    // a "doing" slot is achieved when it was logged with the same text as what was planned for that slot
+    const achieved = doingVals.map((v, i) => !!v && v === plannedVals[i]);
+    allColumnRuns.push({ dayIdx, type: "planned", date: d, runs: buildRunsFromValues(plannedVals) });
+    allColumnRuns.push({ dayIdx, type: "doing", date: d, runs: buildRunsFromValues(doingVals), achieved });
   });
 
   const compressedRows = new Set();
@@ -69,7 +80,17 @@ export default function PlannerScreen({ t, planner, setPlanner, eisenhower, dayS
   const gridTemplateRows = `auto auto ${rowHeights.map((h) => h + "px").join(" ")}`;
 
   /* ── scrollToDay ── */
-  function scrollToDay(idx) { const el = dayRefs.current[idx]; if (el && scrollRef.current) scrollRef.current.scrollTo({ left: el.offsetLeft - 54, behavior: "smooth" }); }
+  function scrollToDay(idx, behavior = "smooth") { const el = dayRefs.current[idx]; if (el && scrollRef.current) scrollRef.current.scrollTo({ left: el.offsetLeft - 54, behavior }); }
+
+  /* ── jump straight to today's column whenever the weekly grid appears, so Wed–Sun don't need a manual scroll ── */
+  useEffect(() => {
+    if (plannerView !== "weekly") return;
+    const idx = days.findIndex((d) => todayKey(d) === todayStr);
+    if (idx < 0) return;
+    const id = requestAnimationFrame(() => scrollToDay(idx, "auto"));
+    return () => cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plannerView]);
 
   /* ── applyRange (unchanged) ── */
   function applyRange(anchorDate, type, run, startIdx, endIdx, text) {
@@ -252,12 +273,19 @@ export default function PlannerScreen({ t, planner, setPlanner, eisenhower, dayS
           })}
 
           {/* ── data cells (run blocks) ── */}
-          {allColumnRuns.flatMap(({ dayIdx, type, date: d, runs }) =>
+          {allColumnRuns.flatMap(({ dayIdx, type, date: d, runs, achieved }) =>
             runs.map((run) => {
               const sleep = isSleepText(run.text);
               const runKey = `${todayKey(d)}-${type}-${run.start}`;
               const isLong = run.text && run.end - run.start + 1 >= COMPRESS_MIN;
               const isDragSource = dragPreview && dragPreview.dayIdx === dayIdx && dragPreview.type === type && dragPreview.run.start === run.start;
+
+              // "achieved": every slot in this Doing run was logged with exactly what was planned for it
+              const isAchieved = type === "doing" && !!run.text && !!achieved &&
+                achieved.slice(run.start, run.end + 1).every(Boolean);
+
+              // each distinct task gets its own consistent colour, shared between Planned and Doing
+              const baseColor = taskColor(run.text) || (type === "planned" ? t.clay : t.moss);
 
               return (
                 <div key={runKey}
@@ -272,16 +300,28 @@ export default function PlannerScreen({ t, planner, setPlanner, eisenhower, dayS
                     fontWeight: (sleep || isLong) ? 700 : 400,
                     cursor: "pointer",
                     background: isDragSource
-                      ? (sleep ? SLEEP_COLOR : type === "planned" ? t.clay + "40" : t.moss + "40")
-                      : (sleep ? SLEEP_COLOR : run.text ? (type === "planned" ? t.clay + "26" : t.moss + "26") : "transparent"),
+                      ? (sleep ? SLEEP_COLOR : baseColor + "40")
+                      : (sleep ? SLEEP_COLOR : run.text ? (baseColor + (isAchieved ? "45" : "26")) : "transparent"),
                     color: sleep ? "#4a3a08" : run.text ? t.ink : t.sub,
                     display: "flex", alignItems: "center", justifyContent: sleep ? "center" : "flex-start",
                     overflow: "hidden", whiteSpace: run.end > run.start ? "normal" : "nowrap", textOverflow: "ellipsis", textAlign: sleep ? "center" : "left", lineHeight: 1.2,
                     position: "relative",
-                    outline: isDragSource ? `2px solid ${type === "planned" ? t.clay : t.moss}` : "none",
+                    outline: isDragSource ? `2px solid ${baseColor}` : isAchieved ? `1.5px solid #2e9e5b` : "none",
                     outlineOffset: -2,
                   }}>
                   {sleep ? "💤 Sleep" : run.text}
+
+                  {/* achievement mark: logged in Doing exactly as planned */}
+                  {isAchieved && (
+                    <div style={{
+                      position: "absolute", top: 1, right: 1,
+                      width: 12, height: 12, borderRadius: "50%",
+                      background: "#2e9e5b", display: "flex", alignItems: "center", justifyContent: "center",
+                      boxShadow: "0 0 0 1.5px rgba(255,255,255,0.7)", zIndex: 3,
+                    }}>
+                      <Check size={8} color="#fff" strokeWidth={3} />
+                    </div>
+                  )}
 
                   {/* drag handle */}
                   {run.text && (
@@ -291,7 +331,7 @@ export default function PlannerScreen({ t, planner, setPlanner, eisenhower, dayS
                       style={{
                         position: "absolute", bottom: 1, right: 1,
                         width: 7, height: 7, borderRadius: 1,
-                        background: sleep ? "#4a3a08" : t.moss,
+                        background: sleep ? "#4a3a08" : baseColor,
                         opacity: IS_TOUCH ? 0.35 : (hoveredRunKey === runKey ? 0.85 : 0),
                         cursor: "ns-resize", touchAction: "none", zIndex: 5,
                         transition: "opacity 0.15s",
@@ -304,20 +344,23 @@ export default function PlannerScreen({ t, planner, setPlanner, eisenhower, dayS
           )}
 
           {/* ── drag preview overlay ── */}
-          {dragPreview && dragPreview.currentEndRow > dragPreview.run.end && (
-            <div style={{
-              gridColumn: colIndex(dragPreview.dayIdx, dragPreview.type),
-              gridRow: `${dragPreview.run.end + 4} / ${dragPreview.currentEndRow + 4}`,
-              background: dragPreview.type === "planned" ? t.clay + "20" : t.moss + "20",
-              border: `2px dashed ${dragPreview.type === "planned" ? t.clay : t.moss}`,
-              borderRadius: 3, pointerEvents: "none", zIndex: 4,
-            }} />
-          )}
+          {dragPreview && dragPreview.currentEndRow > dragPreview.run.end && (() => {
+            const previewColor = taskColor(dragPreview.run.text) || (dragPreview.type === "planned" ? t.clay : t.moss);
+            return (
+              <div style={{
+                gridColumn: colIndex(dragPreview.dayIdx, dragPreview.type),
+                gridRow: `${dragPreview.run.end + 4} / ${dragPreview.currentEndRow + 4}`,
+                background: previewColor + "20",
+                border: `2px dashed ${previewColor}`,
+                borderRadius: 3, pointerEvents: "none", zIndex: 4,
+              }} />
+            );
+          })()}
 
         </div>
       </div>
 
-      <div style={{ fontSize: 11, color: t.sub, marginTop: 8 }}>Half-hour slots · tap to edit · drag the <span style={{ display: "inline-block", width: 6, height: 6, background: t.moss, borderRadius: 1, verticalAlign: "middle", margin: "0 2px" }} /> handle at a block's corner to fill down instantly.</div>
+      <div style={{ fontSize: 11, color: t.sub, marginTop: 8 }}>Half-hour slots · tap to edit · drag the <span style={{ display: "inline-block", width: 6, height: 6, background: t.moss, borderRadius: 1, verticalAlign: "middle", margin: "0 2px" }} /> handle at a block's corner to fill down instantly. Each task keeps its own colour across Planned and Doing · a <span style={{ display: "inline-flex", width: 10, height: 10, background: "#2e9e5b", borderRadius: "50%", verticalAlign: "middle", margin: "0 2px", alignItems: "center", justifyContent: "center" }}><Check size={7} color="#fff" strokeWidth={3} /></span> mark means you logged exactly what you planned.</div>
 
       {editing && (
         <PlannerCellEditor t={t} editing={editing} eisenhower={eisenhower} onClose={() => setEditing(null)}

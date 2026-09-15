@@ -30,6 +30,25 @@ export const THEMES = {
 
 export const SLEEP_COLOR = "#D9A62B";
 
-export const TASK_COLORS = ["#7C9885", "#C97B63", "#6B8CAE", "#B8860B", "#9370DB",
-  "#5F9EA0", "#CD5C5C", "#4682B4"];
+export const TASK_COLORS = [
+  "#7C9885", "#C97B63", "#6B8CAE", "#B8860B", "#9370DB",
+  "#5F9EA0", "#CD5C5C", "#4682B4", "#D2691E", "#8A9A5B",
+  "#BC8F8F", "#556B8D", "#A0522D", "#708090", "#C71585",
+  "#20B2AA", "#DAA520", "#8B7CA6", "#4F7942", "#B76E79",
+];
+
+// Deterministically maps a task's text to one of TASK_COLORS, so the same
+// task always gets the same colour (in the Planned column, the Doing column,
+// and across different days/weeks), while different tasks get different
+// colours. Returns null for empty text.
+export function taskColor(text) {
+  if (!text) return null;
+  const norm = text.trim().toLowerCase();
+  if (!norm) return null;
+  let hash = 0;
+  for (let i = 0; i < norm.length; i++) {
+    hash = (hash * 31 + norm.charCodeAt(i)) >>> 0;
+  }
+  return TASK_COLORS[hash % TASK_COLORS.length];
+}
  

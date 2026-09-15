@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { todayKey } from "../utils/dates";
 
 // Buckets a 0..1 completion value into one of 4 opacity steps (plus empty),
@@ -30,6 +30,11 @@ function buildWeeks(days) {
   return weeks;
 }
 
+// Short weekday labels for the left-hand gutter, Mon..Sun. Only a few are
+// shown (GitHub-style) so the column doesn't get noisy — enough to orient
+// which row is which day without labeling every single one.
+const WEEKDAY_LABELS = ["Mon", "", "Wed", "", "Fri", "", ""];
+
 /**
  * Minimalist week-column heatmap for consistency tracking.
  *
@@ -38,16 +43,37 @@ function buildWeeks(days) {
  * onCellClick: optional (dateKey) => void — omit for a read-only/aggregate view.
  * cellSize/gap: pixel sizes, so the same component can be full-size (overview)
  *               or shrunk down (per-task rows).
+ * showWeekdayLabels: show a Mon/Wed/Fri gutter on the left so rows are easy
+ *               to read at a glance (defaults on for the larger overview grid,
+ *               off for the compact per-task rows where there's less space).
  */
-export default function ConsistencyHeatmap({ t, days, getValue, onCellClick, getAriaLabel, cellSize = 11, gap = 3, showMonthLabels = true }) {
+export default function ConsistencyHeatmap({
+  t,
+  days,
+  getValue,
+  onCellClick,
+  getAriaLabel,
+  cellSize = 11,
+  gap = 3,
+  showMonthLabels = true,
+  showWeekdayLabels = showMonthLabels,
+}) {
   const weeks = buildWeeks(days);
   const todayStr = todayKey();
   let lastMonth = null;
 
+  // Which cell is currently hovered/tapped, so we can show a small floating
+  // tooltip with the actual date — the native `title` attribute works on
+  // desktop hover but is invisible on touch, which was the original problem.
+  const [activeCell, setActiveCell] = useState(null); // { key, label, x, y }
+
+  const rowHeight = cellSize + gap;
+
   return (
-    <div style={{ display: "inline-flex", flexDirection: "column", gap: 3 }}>
+    <div style={{ display: "inline-flex", flexDirection: "column", gap: 3, position: "relative" }}>
       {showMonthLabels && (
         <div style={{ display: "flex", gap }}>
+          {showWeekdayLabels && <div style={{ width: 26, flexShrink: 0 }} />}
           {weeks.map((week, wi) => {
             const firstDay = week.find(Boolean);
             const month = firstDay ? firstDay.getMonth() : null;
@@ -62,6 +88,15 @@ export default function ConsistencyHeatmap({ t, days, getValue, onCellClick, get
         </div>
       )}
       <div style={{ display: "flex", gap }}>
+        {showWeekdayLabels && (
+          <div style={{ display: "flex", flexDirection: "column", gap, width: 26, flexShrink: 0 }}>
+            {WEEKDAY_LABELS.map((lbl, i) => (
+              <div key={i} style={{ height: cellSize, fontSize: 8.5, lineHeight: `${cellSize}px`, color: t.sub, textAlign: "right", paddingRight: 4, whiteSpace: "nowrap" }}>
+                {lbl}
+              </div>
+            ))}
+          </div>
+        )}
         {weeks.map((week, wi) => (
           <div key={wi} style={{ display: "flex", flexDirection: "column", gap }}>
             {week.map((d, di) => {
@@ -71,13 +106,21 @@ export default function ConsistencyHeatmap({ t, days, getValue, onCellClick, get
               const value = raw === true ? 1 : (raw || 0);
               const alpha = alphaForValue(value);
               const isToday = key === todayStr;
-              const dateLabel = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+              const dateLabel = d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
               const label = getAriaLabel ? getAriaLabel(key, value > 0) : `${dateLabel}${value > 0 ? " completed" : ""}`;
               const Tag = onCellClick ? "button" : "div";
+              const showTooltip = () => setActiveCell({ key, label: `${dateLabel}${value > 0 ? " · done" : ""}`, x: wi * (cellSize + gap), y: di * rowHeight });
+              const hideTooltip = () => setActiveCell((c) => (c && c.key === key ? null : c));
               return (
                 <Tag
                   key={di}
                   onClick={onCellClick ? () => onCellClick(key) : undefined}
+                  onMouseEnter={showTooltip}
+                  onMouseLeave={hideTooltip}
+                  onTouchStart={showTooltip}
+                  onTouchEnd={hideTooltip}
+                  onFocus={showTooltip}
+                  onBlur={hideTooltip}
                   title={value > 0 ? `${dateLabel} · done` : dateLabel}
                   aria-label={label}
                   aria-pressed={onCellClick ? value > 0 : undefined}
@@ -90,6 +133,8 @@ export default function ConsistencyHeatmap({ t, days, getValue, onCellClick, get
                     padding: 0,
                     cursor: onCellClick ? "pointer" : "default",
                     boxSizing: "border-box",
+                    outline: isToday ? `1px solid ${t.moss}` : "none",
+                    outlineOffset: isToday ? 1 : 0,
                   }}
                 />
               );
@@ -97,6 +142,28 @@ export default function ConsistencyHeatmap({ t, days, getValue, onCellClick, get
           </div>
         ))}
       </div>
+      {activeCell && (
+        <div
+          style={{
+            position: "absolute",
+            left: (showWeekdayLabels ? 26 + gap : 0) + activeCell.x,
+            top: (showMonthLabels ? 14 : 0) + activeCell.y - 26,
+            transform: "translateX(-30%)",
+            background: t.ink,
+            color: t.bg,
+            fontSize: 10.5,
+            fontWeight: 600,
+            padding: "4px 7px",
+            borderRadius: 5,
+            whiteSpace: "nowrap",
+            pointerEvents: "none",
+            zIndex: 20,
+            boxShadow: "0 2px 6px rgba(0,0,0,0.18)",
+          }}
+        >
+          {activeCell.label}
+        </div>
+      )}
     </div>
   );
 }

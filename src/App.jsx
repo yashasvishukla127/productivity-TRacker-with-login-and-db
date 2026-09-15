@@ -793,6 +793,10 @@ export default function FocusApp() {
     }
   }
 
+  function reorderTasks(newTasksOrder) {
+    setTasks(newTasksOrder);
+  }
+
   // D. New handler functions
   function addBreakTask() {
     const text = newBreakTask.trim();
@@ -980,6 +984,7 @@ export default function FocusApp() {
               addTask={addTask}
               toggleTask={toggleTask}
               removeTask={removeTask}
+              reorderTasks={reorderTasks}
               activeTaskId={activeTaskId}
               setActiveTaskId={setActiveTaskId}
               setTaskTarget={setTaskTarget}

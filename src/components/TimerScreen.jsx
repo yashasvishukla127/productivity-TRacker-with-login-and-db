@@ -1,7 +1,14 @@
-import React from "react";
-import { Play, Pause, RotateCcw, Plus, Check, X, Square } from "lucide-react";
+import React, { useRef, useState } from "react";
+import { Play, Pause, RotateCcw, Plus, Check, X, Square, Flame, GripVertical } from "lucide-react";
 import { MODES } from "../theme";
 import { fmt } from "../utils/dates";
+
+function arrayMove(list, fromIndex, toIndex) {
+  const copy = list.slice();
+  const [moved] = copy.splice(fromIndex, 1);
+  copy.splice(toIndex, 0, moved);
+  return copy;
+}
 
 export default function TimerScreen({
   t,
@@ -24,6 +31,7 @@ export default function TimerScreen({
   addTask,
   toggleTask,
   removeTask,
+  reorderTasks,
   breakTasks,
   newBreakTask,
   setNewBreakTask,
@@ -39,6 +47,53 @@ export default function TimerScreen({
 }) {
   const displaySeconds = modeKey === "stopwatch" ? stopwatchSecs : secondsLeft;
   const activeTask = tasks.find((tk) => tk.id === activeTaskId);
+
+  // --- Drag-to-reorder state (pointer-based so it works with touch on Android/Capacitor) ---
+  const rowRefs = useRef({}); // taskId -> DOM node
+  const [dragState, setDragState] = useState(null); // { id, index, startY, deltaY }
+
+  function handleGripPointerDown(e, tk, index) {
+    e.stopPropagation();
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setDragState({ id: tk.id, index, startY: e.clientY, deltaY: 0, pointerId: e.pointerId });
+  }
+
+  function handleGripPointerMove(e) {
+    if (!dragState || dragState.pointerId !== e.pointerId) return;
+    const deltaY = e.clientY - dragState.startY;
+    const rowEl = rowRefs.current[dragState.id];
+    const rowHeight = (rowEl && rowEl.offsetHeight ? rowEl.offsetHeight : 40) + 6; // include gap
+
+    const shift = Math.round(deltaY / rowHeight);
+    if (shift !== 0) {
+      const newIndex = Math.min(
+        Math.max(dragState.index + shift, 0),
+        tasks.length - 1
+      );
+      if (newIndex !== dragState.index && typeof reorderTasks === "function") {
+        const reordered = arrayMove(tasks, dragState.index, newIndex);
+        reorderTasks(reordered);
+        setDragState({
+          id: dragState.id,
+          index: newIndex,
+          startY: dragState.startY + shift * rowHeight,
+          deltaY: deltaY - shift * rowHeight,
+          pointerId: dragState.pointerId
+        });
+        return;
+      }
+    }
+    setDragState({ ...dragState, deltaY });
+  }
+
+  function handleGripPointerUp(e) {
+    if (!dragState || dragState.pointerId !== e.pointerId) return;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch (err) {}
+    setDragState(null);
+  }
 
   return (
     <div>
@@ -287,9 +342,9 @@ export default function TimerScreen({
             <div
               style={{
                 display: "flex",
-                justifyContent: "space-between",
+                justifyContent: "center",
                 alignItems: "center",
-                marginBottom: 10
+                marginBottom: 12
               }}
             >
               <span
@@ -305,16 +360,57 @@ export default function TimerScreen({
               >
                 WORKING TASKs
               </span>
+            </div>
+
+            {/* Big eye-catching "focused today" stat */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 12,
+                padding: "16px 20px",
+                borderRadius: 18,
+                marginBottom: 16,
+                background: `linear-gradient(135deg, ${t.moss}26, ${t.clay}26)`,
+                border: `1px solid ${t.moss}40`,
+                boxShadow: `0 4px 20px ${t.moss}22`
+              }}
+            >
+              <Flame size={26} color={t.clay} fill={t.clay + "33"} />
+              <span
+                style={{
+                  fontSize: 40,
+                  fontWeight: 800,
+                  fontFamily: "Georgia,serif",
+                  letterSpacing: "-0.03em",
+                  lineHeight: 1,
+                  backgroundImage: `linear-gradient(135deg, ${t.moss}, ${t.clay})`,
+                  WebkitBackgroundClip: "text",
+                  backgroundClip: "text",
+                  WebkitTextFillColor: "transparent",
+                  color: t.moss
+                }}
+              >
+                {Math.floor(todayFocusedMinutes / 60)}
+                <span style={{ fontSize: 20 }}>h</span>{" "}
+                {Math.round(todayFocusedMinutes % 60)}
+                <span style={{ fontSize: 20 }}>m</span>
+              </span>
               <span
                 style={{
                   fontSize: 10.5,
                   color: t.sub,
-                  opacity: 0.6,
-                  fontFamily: "system-ui"
+                  textTransform: "uppercase",
+                  letterSpacing: "0.1em",
+                  fontFamily: "system-ui",
+                  lineHeight: 1.3,
+                  textAlign: "left"
                 }}
               >
-                Today: {Math.floor(todayFocusedMinutes / 60)}h{" "}
-                {Math.round(todayFocusedMinutes % 60)}m
+                focused
+                <br />
+                today
               </span>
             </div>
 
@@ -388,7 +484,7 @@ export default function TimerScreen({
                 </div>
               )}
 
-              {tasks.map((tk) => {
+              {tasks.map((tk, index) => {
                 const taskColor = tk.color || t.moss;
                 const liveExtra =
                   tk.id === activeTaskId ? inProgressMinutes : 0;
@@ -409,9 +505,14 @@ export default function TimerScreen({
                     }${spentMins}m / ${tk.targetHours}h`
                   : null;
 
+                const isDragging = dragState && dragState.id === tk.id;
+
                 return (
                   <div
                     key={tk.id}
+                    ref={(el) => {
+                      rowRefs.current[tk.id] = el;
+                    }}
                     onClick={() =>
                       setActiveTaskId(
                         tk.id === activeTaskId ? null : tk.id
@@ -434,9 +535,43 @@ export default function TimerScreen({
                           ? t.moss + "44"
                           : "transparent"
                       }`,
-                      cursor: "pointer"
+                      cursor: "pointer",
+                      transform: isDragging
+                        ? `translateY(${dragState.deltaY}px) scale(1.02)`
+                        : "none",
+                      transition: isDragging
+                        ? "none"
+                        : "transform .15s ease",
+                      zIndex: isDragging ? 5 : 1,
+                      boxShadow: isDragging
+                        ? "0 8px 20px rgba(0,0,0,0.18)"
+                        : "none"
                     }}
                   >
+                    {/* Drag Handle */}
+                    <span
+                      onPointerDown={(e) =>
+                        handleGripPointerDown(e, tk, index)
+                      }
+                      onPointerMove={handleGripPointerMove}
+                      onPointerUp={handleGripPointerUp}
+                      onPointerCancel={handleGripPointerUp}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{
+                        position: "relative",
+                        zIndex: 1,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                        color: t.sub,
+                        opacity: 0.5,
+                        cursor: "grab",
+                        touchAction: "none"
+                      }}
+                    >
+                      <GripVertical size={14} />
+                    </span>
                     {/* Embedded Progress Fill Layer */}
                     {tk.targetHours > 0 && (
                       <div

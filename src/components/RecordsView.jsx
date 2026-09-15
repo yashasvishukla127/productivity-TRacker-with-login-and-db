@@ -18,11 +18,15 @@ export default function RecordsView({ t, sessions, sleepSettings, tasks = [] }) 
   const pct = (min) => mapMinuteToPercent(min, wakeMin, sleepMin, ACTIVE_WIDTH_PCT);
   const activeEndPct = sleepOn ? pct(sleepMin) : 100;
 
+  const MAJOR_STEP_MIN = 180; // labels shown bold every 3h, like before
+  const HOUR_STEP_MIN = 60; // grid line + small label every 1h
+
   const hourMarks = useMemo(() => {
     const activeDur = sleepOn ? ((sleepMin - wakeMin + 1440) % 1440) || 1440 : 1440;
-    const stepMin = activeDur > 12 * 60 ? 180 : 120;
     const marks = [];
-    for (let m = 0; m <= activeDur; m += stepMin) marks.push({ min: wakeMin + m, pct: pct(wakeMin + m) });
+    for (let m = 0; m <= activeDur; m += HOUR_STEP_MIN) {
+      marks.push({ min: wakeMin + m, pct: pct(wakeMin + m), major: m % MAJOR_STEP_MIN === 0 });
+    }
     return marks;
   }, [wakeMin, sleepMin, sleepOn]);
 
@@ -33,7 +37,17 @@ export default function RecordsView({ t, sessions, sleepSettings, tasks = [] }) 
           <div />
           <div style={{ position: "relative", height: 14 }}>
             {hourMarks.map((mk) => (
-              <span key={mk.min} style={{ position: "absolute", left: `${mk.pct}%`, transform: "translateX(-50%)" }}>
+              <span
+                key={mk.min}
+                style={{
+                  position: "absolute",
+                  left: `${mk.pct}%`,
+                  transform: "translateX(-50%)",
+                  fontSize: mk.major ? 9.5 : 8,
+                  fontWeight: mk.major ? 600 : 400,
+                  color: mk.major ? t.sub : `${t.sub}99`,
+                }}
+              >
                 {minToTime(mk.min)}
               </span>
             ))}
@@ -55,6 +69,22 @@ export default function RecordsView({ t, sessions, sleepSettings, tasks = [] }) 
                   {key === todayKey() ? "Today" : d.toLocaleDateString(undefined, { day: "2-digit", month: "short" })}
                 </span>
                 <div style={{ position: "relative", height: 16, background: t.bg, borderRadius: 4, overflow: "hidden" }}>
+                  {hourMarks.map((mk) => (
+                    <div
+                      key={`grid-${mk.min}`}
+                      style={{
+                        position: "absolute",
+                        left: `${mk.pct}%`,
+                        top: 0,
+                        bottom: 0,
+                        width: 0,
+                        borderLeft: `1px dotted ${t.line}`,
+                        opacity: mk.major ? 0.9 : 0.45,
+                        pointerEvents: "none",
+                        zIndex: 1,
+                      }}
+                    />
+                  ))}
                   {sleepOn && (
                     <div
                       onClick={() =>
@@ -78,6 +108,7 @@ export default function RecordsView({ t, sessions, sleepSettings, tasks = [] }) 
                         borderLeft: `1px solid ${t.line}`,
                         cursor: "pointer",
                         outline: selected?.id === sleepId ? `2px solid ${t.ink}` : "none",
+                        zIndex: 2,
                       }}
                     />
                   )}
