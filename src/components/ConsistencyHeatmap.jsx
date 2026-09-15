@@ -12,6 +12,15 @@ function alphaForValue(v) {
   return "38";
 }
 
+// Resolves the actual CSS background for a cell. Fully-completed days get a
+// subtle two-tone moss→clay gradient instead of a flat fill — a small bit of
+// polish that makes a "perfect" day visually pop against partial ones.
+function cellBackground(value, t) {
+  if (value <= 0) return null;
+  if (value >= 0.99) return `linear-gradient(135deg, ${t.moss}, ${t.clay})`;
+  return t.moss + alphaForValue(value);
+}
+
 // Groups a chronological list of Dates into Monday-start week columns,
 // left-padding/right-padding the first/last week with nulls so every
 // column has exactly 7 slots (Mon..Sun) and columns line up as real weeks.
@@ -34,6 +43,34 @@ function buildWeeks(days) {
 // shown (GitHub-style) so the column doesn't get noisy — enough to orient
 // which row is which day without labeling every single one.
 const WEEKDAY_LABELS = ["Mon", "", "Wed", "", "Fri", "", ""];
+
+/**
+ * Small "Less ▢▢▢▢ More" key explaining the fill scale. Drop it under any
+ * heatmap instance — sized to match cellSize so the swatches read as the
+ * same squares used in the grid above them.
+ */
+export function HeatmapLegend({ t, cellSize = 11 }) {
+  const steps = [0, 0.25, 0.5, 0.75, 1];
+  return (
+    <div style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, color: t.sub }}>
+      <span>Less</span>
+      {steps.map((v, i) => (
+        <div
+          key={i}
+          style={{
+            width: cellSize,
+            height: cellSize,
+            borderRadius: 3,
+            background: cellBackground(v, t) || "transparent",
+            border: v <= 0 ? `1px solid ${t.line}` : "none",
+            boxSizing: "border-box",
+          }}
+        />
+      ))}
+      <span>More</span>
+    </div>
+  );
+}
 
 /**
  * Minimalist week-column heatmap for consistency tracking.
@@ -71,6 +108,11 @@ export default function ConsistencyHeatmap({
 
   return (
     <div style={{ display: "inline-flex", flexDirection: "column", gap: 3, position: "relative" }}>
+      <style>{`
+        .sf-heat-cell { transition: transform 110ms ease, box-shadow 110ms ease, filter 110ms ease; }
+        .sf-heat-cell:hover { transform: scale(1.22); box-shadow: 0 1px 4px rgba(0,0,0,0.25); z-index: 5; position: relative; }
+        .sf-heat-cell:active { transform: scale(1.05); }
+      `}</style>
       {showMonthLabels && (
         <div style={{ display: "flex", gap }}>
           {showWeekdayLabels && <div style={{ width: 26, flexShrink: 0 }} />}
@@ -80,7 +122,7 @@ export default function ConsistencyHeatmap({
             const label = firstDay && month !== lastMonth ? firstDay.toLocaleDateString(undefined, { month: "short" }) : "";
             if (firstDay) lastMonth = month;
             return (
-              <div key={wi} style={{ width: cellSize, fontSize: 8.5, color: t.sub, textAlign: "left", whiteSpace: "nowrap", overflow: "visible" }}>
+              <div key={wi} style={{ width: cellSize, fontSize: 8.5, color: t.sub, textAlign: "left", whiteSpace: "nowrap", overflow: "visible", fontWeight: 600, letterSpacing: "0.02em" }}>
                 {label}
               </div>
             );
@@ -104,7 +146,7 @@ export default function ConsistencyHeatmap({
               const key = todayKey(d);
               const raw = getValue(key);
               const value = raw === true ? 1 : (raw || 0);
-              const alpha = alphaForValue(value);
+              const bg = cellBackground(value, t);
               const isToday = key === todayStr;
               const dateLabel = d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
               const label = getAriaLabel ? getAriaLabel(key, value > 0) : `${dateLabel}${value > 0 ? " completed" : ""}`;
@@ -114,6 +156,7 @@ export default function ConsistencyHeatmap({
               return (
                 <Tag
                   key={di}
+                  className="sf-heat-cell"
                   onClick={onCellClick ? () => onCellClick(key) : undefined}
                   onMouseEnter={showTooltip}
                   onMouseLeave={hideTooltip}
@@ -127,13 +170,13 @@ export default function ConsistencyHeatmap({
                   style={{
                     width: cellSize,
                     height: cellSize,
-                    borderRadius: 3,
-                    border: alpha ? "none" : `1px solid ${isToday ? t.moss : t.line}`,
-                    background: alpha ? t.moss + alpha : "transparent",
+                    borderRadius: 4,
+                    border: bg ? "none" : `1px solid ${isToday ? t.moss : t.line}`,
+                    background: bg || "transparent",
                     padding: 0,
                     cursor: onCellClick ? "pointer" : "default",
                     boxSizing: "border-box",
-                    outline: isToday ? `1px solid ${t.moss}` : "none",
+                    outline: isToday ? `1.5px solid ${t.moss}` : "none",
                     outlineOffset: isToday ? 1 : 0,
                   }}
                 />
@@ -147,18 +190,18 @@ export default function ConsistencyHeatmap({
           style={{
             position: "absolute",
             left: (showWeekdayLabels ? 26 + gap : 0) + activeCell.x,
-            top: (showMonthLabels ? 14 : 0) + activeCell.y - 26,
+            top: (showMonthLabels ? 14 : 0) + activeCell.y - 28,
             transform: "translateX(-30%)",
             background: t.ink,
             color: t.bg,
             fontSize: 10.5,
             fontWeight: 600,
-            padding: "4px 7px",
-            borderRadius: 5,
+            padding: "4px 8px",
+            borderRadius: 6,
             whiteSpace: "nowrap",
             pointerEvents: "none",
             zIndex: 20,
-            boxShadow: "0 2px 6px rgba(0,0,0,0.18)",
+            boxShadow: "0 3px 10px rgba(0,0,0,0.25)",
           }}
         >
           {activeCell.label}

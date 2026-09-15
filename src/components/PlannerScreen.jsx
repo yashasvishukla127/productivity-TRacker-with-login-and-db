@@ -79,15 +79,31 @@ export default function PlannerScreen({ t, planner, setPlanner, eisenhower, dayS
   const rowHeights = Array.from({ length: 48 }, (_, i) => compressedRows.has(i) ? COMPRESSED_H : NORMAL_H);
   const gridTemplateRows = `auto auto ${rowHeights.map((h) => h + "px").join(" ")}`;
 
-  /* ── scrollToDay ── */
+  /* ── scrollToDay (horizontal only, e.g. from the day-pill row) ── */
   function scrollToDay(idx, behavior = "smooth") { const el = dayRefs.current[idx]; if (el && scrollRef.current) scrollRef.current.scrollTo({ left: el.offsetLeft - 54, behavior }); }
 
-  /* ── jump straight to today's column whenever the weekly grid appears, so Wed–Sun don't need a manual scroll ── */
+  /* ── scroll to a given day AND a given row (used to land on "today, right now" on open) ── */
+  function scrollToDayAndRow(dayIdx, rowIdx, behavior = "smooth") {
+    if (!gridRef.current || !scrollRef.current) return;
+    const dayEl = dayRefs.current[dayIdx];
+    const marker = gridRef.current.querySelector("[data-rowmarker='0']");
+    if (!dayEl || !marker) return;
+    const gridRect = gridRef.current.getBoundingClientRect();
+    const headerH = marker.getBoundingClientRect().top - gridRect.top;
+    let top = headerH;
+    for (let i = 0; i < rowIdx; i++) top += rowHeights[i];
+    top = Math.max(0, top - 60); // leave a little context above the current-time row
+    scrollRef.current.scrollTo({ left: dayEl.offsetLeft - 54, top, behavior });
+  }
+
+  /* ── jump straight to today's column & current time whenever the weekly grid appears ── */
   useEffect(() => {
     if (plannerView !== "weekly") return;
     const idx = days.findIndex((d) => todayKey(d) === todayStr);
     if (idx < 0) return;
-    const id = requestAnimationFrame(() => scrollToDay(idx, "auto"));
+    const now = new Date();
+    const nowRow = Math.floor((((now.getHours() * 60 + now.getMinutes()) - dayStartHour * 60 + 1440) % 1440) / 30);
+    const id = requestAnimationFrame(() => scrollToDayAndRow(idx, nowRow, "auto"));
     return () => cancelAnimationFrame(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plannerView]);

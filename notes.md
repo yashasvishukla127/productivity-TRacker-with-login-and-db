@@ -86,6 +86,8 @@ git log -1 --oneline
 # If you need the latest GitHub changes:
 git pull
 
+
+
 # 3. BUILD THE LATEST WEB VERSION
 npm run build
 
@@ -127,7 +129,8 @@ Select-Object Name,Length
 
 # 9. ENTER ANDROID PROJECT
 cd android
-
+.\gradlew.bat clean
+.\gradlew.bat assembleDebug
 # 10. CLEAN OLD GRADLE BUILD
 .\gradlew.bat clean
 
