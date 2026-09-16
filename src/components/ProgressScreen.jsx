@@ -59,6 +59,94 @@ function formatMinutes(v, unit) {
   return (v / 60).toFixed(v % 60 === 0 ? 0 : 1);
 }
 
+// "1h 10m" / "45m" / "2h" style duration, used in the per-day chart tooltip
+function formatDuration(minutes) {
+  const total = Math.round(minutes);
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  if (h > 0 && m > 0) return `${h}h ${m}m`;
+  if (h > 0) return `${h}h`;
+  return `${m}m`;
+}
+
+// Custom tooltip for the chart: shows only the tasks actually worked on that
+// day, by name, instead of one "Focused : Xh" line per task (including 0h ones).
+function ChartTooltip({ active, payload, label, tasks, t }) {
+  if (!active || !payload || !payload.length) return null;
+
+  const entries = payload
+    .filter((p) => p.value > 0)
+    .map((p) => {
+      const task = tasks.find((tk) => tk.id === p.dataKey);
+      return {
+        name: task ? task.text : "Other / untagged",
+        color: p.fill || p.color || t.sub,
+        minutes: p.value
+      };
+    });
+
+  return (
+    <div
+      style={{
+        background: t.surface,
+        border: `1px solid ${t.line}`,
+        borderRadius: 8,
+        padding: "8px 10px",
+        fontSize: 12,
+        minWidth: 150,
+        maxWidth: 220
+      }}
+    >
+      <div style={{ fontWeight: 700, marginBottom: 6, color: t.ink }}>
+        {label}
+      </div>
+
+      {entries.length === 0 ? (
+        <div style={{ color: t.sub, fontStyle: "italic", fontSize: 11.5 }}>
+          No focus time
+        </div>
+      ) : (
+        entries.map((e, i) => (
+          <div
+            key={i}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              marginBottom: i === entries.length - 1 ? 0 : 3
+            }}
+          >
+            <span
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: "50%",
+                background: e.color,
+                flexShrink: 0
+              }}
+            />
+            <span
+              style={{
+                color: t.ink,
+                flex: 1,
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap"
+              }}
+            >
+              {e.name}
+            </span>
+            <span style={{ color: t.sub, fontWeight: 600, flexShrink: 0 }}>
+              {formatDuration(e.minutes)}
+            </span>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
 function computeRangeStats(range, sessions, dailyGoalMinutes) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const n = RANGE_DAYS[range];
@@ -77,6 +165,7 @@ function computeRangeStats(range, sessions, dailyGoalMinutes) {
 export default function ProgressScreen({
   t,
   sessions,
+  setSessions,
   totalToday,
   totalAll,
   streak,
@@ -243,16 +332,7 @@ export default function ProgressScreen({
 
                   <Tooltip
                     cursor={{ fill: t.line, opacity: 0.4 }}
-                    contentStyle={{
-                      background: t.surface,
-                      border: `1px solid ${t.line}`,
-                      borderRadius: 8,
-                      fontSize: 12
-                    }}
-                    formatter={(v) => [
-                      `${formatMinutes(v, chartUnit)}${chartUnit === "hr" ? "h" : " min"}`,
-                      "Focused"
-                    ]}
+                    content={<ChartTooltip tasks={tasks} t={t} />}
                   />
 
                   {/* Stacked bars for each task */}
@@ -369,6 +449,7 @@ export default function ProgressScreen({
         <RecordsView
           t={t}
           sessions={sessions}
+          setSessions={setSessions}
           sleepSettings={sleepSettings}
           tasks={tasks}
         />

@@ -90,27 +90,24 @@ git pull
 
 # 3. BUILD THE LATEST WEB VERSION
 npm run build
-
-# 4. VERIFY DIST WAS JUST BUILT
 Get-ChildItem .\dist -Recurse -File |
 Sort-Object LastWriteTime -Descending |
 Select-Object -First 5 Name,LastWriteTime
-
-# 5. SYNC LATEST WEB BUILD INTO ANDROID
 npx cap sync android
-
-# 6. VERIFY ANDROID RECEIVED THE NEW WEB BUILD
 Get-ChildItem .\android\app\src\main\assets\public -Recurse -File |
 Sort-Object LastWriteTime -Descending |
 Select-Object -First 5 Name,LastWriteTime
-
-# 7. COMPARE MAIN JS BUNDLE — DIST
 Get-ChildItem .\dist\assets\index-*.js |
 Select-Object Name,Length
-
-# 8. COMPARE MAIN JS BUNDLE — ANDROID
 Get-ChildItem .\android\app\src\main\assets\public\assets\index-*.js |
 Select-Object Name,Length
+
+cd android
+.\gradlew.bat clean
+.\gradlew.bat assembleDebug
+.\gradlew.bat clean
+.\gradlew.bat assembleDebug
+
 
 # IMPORTANT:
 # The Android index-*.js should have the SAME filename and

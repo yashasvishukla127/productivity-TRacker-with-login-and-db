@@ -1,6 +1,6 @@
-import React, { useState, useMemo, useRef, useCallback } from "react";
-import { ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
-import { todayKey, addDays, timeToMin, minToTime, mapMinuteToPercent } from "../utils/dates";
+import React, { useState, useMemo, useRef, useCallback, useEffect } from "react";
+import { ZoomIn, ZoomOut, RotateCcw, Check, Trash2, Plus, X } from "lucide-react";
+import { todayKey, addDays, timeToMin, minToTime, mapMinuteToPercent, uid } from "../utils/dates";
 import { SLEEP_COLOR } from "../theme";
 
 const ACTIVE_WIDTH_PCT = 88; // waking hours get 88% of the bar, sleep gets the rest
@@ -18,11 +18,18 @@ function touchDist(touches) {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
-export default function RecordsView({ t, sessions, sleepSettings, tasks = [] }) {
+export default function RecordsView({ t, sessions, setSessions, sleepSettings, tasks = [] }) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const [daysToShow, setDaysToShow] = useState(14);
   const days = Array.from({ length: daysToShow }, (_, i) => addDays(today, -i));
   const [selected, setSelected] = useState(null);
+  const [editStart, setEditStart] = useState("");
+  const [editEnd, setEditEnd] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [newDate, setNewDate] = useState("");
+  const [newStart, setNewStart] = useState("");
+  const [newEnd, setNewEnd] = useState("");
+  const [newNote, setNewNote] = useState("");
   const [zoom, setZoom] = useState(1);
   const [hover, setHover] = useState(null); // { x, y, dateLabel, timeLabel, activityLabel }
   const scrollRef = useRef(null);
@@ -35,6 +42,87 @@ export default function RecordsView({ t, sessions, sleepSettings, tasks = [] }) 
     if (s.note && s.note.trim()) return s.note.trim();
     if (s.taskId && nameByTaskId[s.taskId]) return nameByTaskId[s.taskId];
     return s.manual ? "Manual entry" : "Focus session";
+  }
+
+  // Whenever a *different* block is selected, load its current start/end into the editable fields.
+  useEffect(() => {
+    if (selected && !selected.isSleep) {
+      setEditStart(minToTime(selected.startMinutes));
+      setEditEnd(minToTime(selected.startMinutes + selected.minutes));
+    }
+  }, [selected?.id]);
+
+  const editedStartMin = editStart ? timeToMin(editStart) : null;
+  const editedEndMin = editEnd ? timeToMin(editEnd) : null;
+  const editedMinutes = useMemo(() => {
+    if (editedStartMin == null || editedEndMin == null) return null;
+    let diff = editedEndMin - editedStartMin;
+    if (diff <= 0) diff += 1440; // crosses midnight
+    return diff;
+  }, [editedStartMin, editedEndMin]);
+  const editDirty =
+    !!selected &&
+    !selected.isSleep &&
+    (editedStartMin !== selected.startMinutes || editedMinutes !== selected.minutes);
+
+  function saveEdit() {
+    if (!selected || selected.isSleep || editedStartMin == null || editedMinutes == null || !setSessions) return;
+    const id = selected.id;
+    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, startMinutes: editedStartMin, minutes: editedMinutes } : s)));
+    setSelected((sel) => (sel && sel.id === id ? { ...sel, startMinutes: editedStartMin, minutes: editedMinutes } : sel));
+  }
+
+  function deleteSelected() {
+    if (!selected || selected.isSleep || !setSessions) return;
+    if (typeof window !== "undefined" && !window.confirm("Delete this entry? This can't be undone.")) return;
+    const id = selected.id;
+    setSessions((prev) => prev.filter((s) => s.id !== id));
+    setSelected(null);
+  }
+
+  // Reverse of mapMinuteToPercent: given an x-position on the bar (0-100%), return the clock minute it represents.
+  function pctToMin(clickPct) {
+    const clamped = Math.min(100, Math.max(0, clickPct));
+    const activeDur = sleepOn ? ((sleepMin - wakeMin + 1440) % 1440) || 1440 : 1440;
+    const sleepDur = 1440 - activeDur;
+    let sinceWake;
+    if (sleepDur === 0 || clamped <= ACTIVE_WIDTH_PCT) {
+      sinceWake = (clamped / (sleepDur === 0 ? 100 : ACTIVE_WIDTH_PCT)) * activeDur;
+    } else {
+      const sinceSleepStart = ((clamped - ACTIVE_WIDTH_PCT) / (100 - ACTIVE_WIDTH_PCT)) * sleepDur;
+      sinceWake = activeDur + sinceSleepStart;
+    }
+    return (((wakeMin + sinceWake) % 1440) + 1440) % 1440;
+  }
+
+  function startAddAt(dayKey, startMin) {
+    setSelected(null);
+    const rounded = Math.round(startMin / 5) * 5;
+    setNewDate(dayKey);
+    setNewStart(minToTime(rounded));
+    setNewEnd(minToTime(rounded + 30));
+    setNewNote("");
+    setAdding(true);
+  }
+
+  const newStartMin = newStart ? timeToMin(newStart) : null;
+  const newEndMin = newEnd ? timeToMin(newEnd) : null;
+  const newMinutes = useMemo(() => {
+    if (newStartMin == null || newEndMin == null) return null;
+    let diff = newEndMin - newStartMin;
+    if (diff <= 0) diff += 1440;
+    return diff;
+  }, [newStartMin, newEndMin]);
+
+  function saveNewEntry() {
+    if (!setSessions || newStartMin == null || newMinutes == null || !newDate) return;
+    const newSession = { id: uid(), date: newDate, startMinutes: newStartMin, minutes: newMinutes, mode: "manual", manual: true, note: newNote.trim() };
+    setSessions((prev) => [...prev, newSession]);
+    setAdding(false);
+    setSelected(newSession);
+  }
+  function cancelAdd() {
+    setAdding(false);
   }
 
   const sleepOn = !!sleepSettings?.enabled;
@@ -101,9 +189,16 @@ export default function RecordsView({ t, sessions, sleepSettings, tasks = [] }) 
       <div style={{ background: t.surface, borderRadius: 14, padding: "14px 12px" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8 }}>
           <div style={{ fontSize: 10, color: t.sub }}>
-            {zoom > 1 ? "Pinch, drag, or scroll sideways to pan" : "Pinch or use +/- to zoom into an hourly view"}
+            {zoom > 1 ? "Pinch, drag, or scroll sideways to pan" : "Tap empty space on a bar to add an entry there"}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+            <button
+              onClick={() => startAddAt(todayKey(), 540)}
+              title="Add entry"
+              style={{ display: "flex", alignItems: "center", gap: 3, height: 24, padding: "0 8px", borderRadius: 7, border: `1px solid ${t.moss}`, background: "transparent", color: t.moss, cursor: "pointer", fontSize: 10.5, fontWeight: 700 }}
+            >
+              <Plus size={11} /> Add
+            </button>
             <button
               onClick={() => zoomBy(1 / ZOOM_STEP)}
               disabled={zoom <= MIN_ZOOM}
@@ -180,7 +275,14 @@ export default function RecordsView({ t, sessions, sleepSettings, tasks = [] }) 
                   <span style={{ width: 54, flexShrink: 0, position: "sticky", left: 0, zIndex: 2, background: t.surface, fontSize: 10.5, color: t.sub, paddingRight: 4 }}>
                     {dateLabel}
                   </span>
-                  <div style={{ position: "relative", height: 16, flex: 1, minWidth: 0, background: t.bg, borderRadius: 4, overflow: "hidden" }}>
+                  <div
+                    onClick={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const clickPct = ((e.clientX - rect.left) / rect.width) * 100;
+                      startAddAt(key, pctToMin(clickPct));
+                    }}
+                    style={{ position: "relative", height: 16, flex: 1, minWidth: 0, background: t.bg, borderRadius: 4, overflow: "hidden", cursor: "copy" }}
+                  >
                     {hourMarks.map((mk) => (
                       <div
                         key={`grid-${mk.min}`}
@@ -199,7 +301,9 @@ export default function RecordsView({ t, sessions, sleepSettings, tasks = [] }) 
                     ))}
                     {sleepOn && (
                       <div
-                        onClick={() =>
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setAdding(false);
                           setSelected({
                             id: sleepId,
                             date: key,
@@ -207,8 +311,8 @@ export default function RecordsView({ t, sessions, sleepSettings, tasks = [] }) 
                             minutes: (1440 - ((sleepMin - wakeMin + 1440) % 1440)) || 1440,
                             note: "Sleep",
                             isSleep: true,
-                          })
-                        }
+                          });
+                        }}
                         onMouseEnter={(e) => showTooltip(e, dateLabel, `${minToTime(sleepMin)}–${minToTime(sleepMin + ((1440 - ((sleepMin - wakeMin + 1440) % 1440)) || 1440))}`, "Sleep")}
                         onMouseMove={moveTooltip}
                         onMouseLeave={hideTooltip}
@@ -236,7 +340,11 @@ export default function RecordsView({ t, sessions, sleepSettings, tasks = [] }) 
                       return (
                         <div
                           key={s.id}
-                          onClick={() => setSelected(s)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setAdding(false);
+                            setSelected(s);
+                          }}
                           onMouseEnter={(e) => showTooltip(e, dateLabel, `${minToTime(start)}–${minToTime(start + s.minutes)}`, label)}
                           onMouseMove={moveTooltip}
                           onMouseLeave={hideTooltip}
@@ -286,28 +394,167 @@ export default function RecordsView({ t, sessions, sleepSettings, tasks = [] }) 
           )}
         </div>
       </div>
-      <div style={{ marginTop: 10, minHeight: 40, background: t.surface, borderRadius: 10, padding: "10px 12px", fontSize: 12.5, color: selected ? t.ink : t.sub }}>
-        {selected ? (
-          (() => {
-            const startH = Math.floor(selected.startMinutes / 60).toString().padStart(2, "0");
-            const startM = (selected.startMinutes % 60).toString().padStart(2, "0");
-            const endTotal = selected.startMinutes + selected.minutes;
-            const endH = Math.floor((endTotal % 1440) / 60).toString().padStart(2, "0");
-            const endM = (endTotal % 60).toString().padStart(2, "0");
-            return (
-              <span>
-                <strong>{new Date(selected.date + "T00:00:00").toLocaleDateString(undefined, { day: "2-digit", month: "short" })}</strong>
-                {" · "}
-                {startH}:{startM}–{endH}:{endM} · {selected.minutes}m{selected.note ? ` · ${selected.note}` : ""}
+      <div style={{ marginTop: 10, minHeight: 40, background: t.surface, borderRadius: 10, padding: "12px 14px", fontSize: 12.5 }}>
+        {!selected && !adding && (
+          <span style={{ color: t.sub }}>
+            {sleepOn
+              ? `Tap a block to see, edit or delete it. Tap empty space on a bar — or the Add button above — to log a new entry. The timeline starts at your wake time (${sleepSettings.end}) and sleep is compressed on the right.`
+              : "Tap a block to see, edit or delete it. Tap empty space on a bar — or the Add button above — to log a new entry. Set a wake/sleep time in Settings to compress the sleep hours."}
+          </span>
+        )}
+
+        {selected && selected.isSleep && (
+          <div>
+            <div style={{ color: t.ink }}>
+              <strong>{new Date(selected.date + "T00:00:00").toLocaleDateString(undefined, { day: "2-digit", month: "short" })}</strong>
+              {" · "}Sleep {minToTime(selected.startMinutes)}–{minToTime(selected.startMinutes + selected.minutes)}
+            </div>
+            <div style={{ color: t.sub, fontSize: 11, marginTop: 4 }}>
+              Sleep hours come from your wake/sleep schedule — edit them in <strong>Settings</strong>.
+            </div>
+          </div>
+        )}
+
+        {selected && !selected.isSleep && (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 8 }}>
+              <strong style={{ color: t.ink }}>
+                {new Date(selected.date + "T00:00:00").toLocaleDateString(undefined, { day: "2-digit", month: "short" })}
+              </strong>
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ color: t.sub, fontSize: 11.5, textAlign: "right" }}>{activityLabel(selected)}</span>
+                <button
+                  onClick={deleteSelected}
+                  title="Delete entry"
+                  style={{ width: 22, height: 22, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 6, border: `1px solid ${t.line}`, background: "transparent", color: t.clay, cursor: "pointer" }}
+                >
+                  <Trash2 size={12} />
+                </button>
               </span>
-            );
-          })()
-        ) : sleepOn ? (
-          `Tap a block above to see its date, time and duration. The timeline starts at your wake time (${sleepSettings.end}) and sleep is compressed on the right.`
-        ) : (
-          "Tap a block above to see its date, time and duration. Set a wake/sleep time in Settings to compress the sleep hours."
+            </div>
+
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <span style={{ fontSize: 10, color: t.sub, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>Start</span>
+                <input
+                  type="time"
+                  value={editStart}
+                  onChange={(e) => setEditStart(e.target.value)}
+                  style={{ background: t.bg, border: `1px solid ${t.line}`, borderRadius: 8, padding: "6px 8px", color: t.ink, fontSize: 13, outline: "none", colorScheme: t.bg === "#1B1E1A" ? "dark" : "light" }}
+                />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <span style={{ fontSize: 10, color: t.sub, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>End</span>
+                <input
+                  type="time"
+                  value={editEnd}
+                  onChange={(e) => setEditEnd(e.target.value)}
+                  style={{ background: t.bg, border: `1px solid ${t.line}`, borderRadius: 8, padding: "6px 8px", color: t.ink, fontSize: 13, outline: "none", colorScheme: t.bg === "#1B1E1A" ? "dark" : "light" }}
+                />
+              </label>
+              <button
+                onClick={saveEdit}
+                disabled={!editDirty}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 5,
+                  padding: "7px 12px",
+                  borderRadius: 8,
+                  border: "none",
+                  background: editDirty ? t.moss : t.line,
+                  color: editDirty ? t.bg : t.sub,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: editDirty ? "pointer" : "default",
+                }}
+              >
+                <Check size={13} /> Save
+              </button>
+            </div>
+
+            <div style={{ fontSize: 10.5, color: t.sub, marginTop: 8 }}>
+              {editedMinutes != null ? `Duration: ${Math.floor(editedMinutes / 60)}h ${editedMinutes % 60}m` : ""}
+              {editDirty ? " · unsaved change" : ""}
+            </div>
+          </div>
+        )}
+
+        {adding && (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 8 }}>
+              <strong style={{ color: t.ink }}>
+                New entry · {new Date(newDate + "T00:00:00").toLocaleDateString(undefined, { day: "2-digit", month: "short" })}
+              </strong>
+              <button
+                onClick={cancelAdd}
+                title="Cancel"
+                style={{ width: 22, height: 22, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 6, border: `1px solid ${t.line}`, background: "transparent", color: t.sub, cursor: "pointer" }}
+              >
+                <X size={13} />
+              </button>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <span style={{ fontSize: 10, color: t.sub, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>Start</span>
+                <input
+                  type="time"
+                  value={newStart}
+                  onChange={(e) => setNewStart(e.target.value)}
+                  style={{ background: t.bg, border: `1px solid ${t.line}`, borderRadius: 8, padding: "6px 8px", color: t.ink, fontSize: 13, outline: "none", colorScheme: t.bg === "#1B1E1A" ? "dark" : "light" }}
+                />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <span style={{ fontSize: 10, color: t.sub, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>End</span>
+                <input
+                  type="time"
+                  value={newEnd}
+                  onChange={(e) => setNewEnd(e.target.value)}
+                  style={{ background: t.bg, border: `1px solid ${t.line}`, borderRadius: 8, padding: "6px 8px", color: t.ink, fontSize: 13, outline: "none", colorScheme: t.bg === "#1B1E1A" ? "dark" : "light" }}
+                />
+              </label>
+            </div>
+
+            <label style={{ display: "flex", flexDirection: "column", gap: 3, marginBottom: 10 }}>
+              <span style={{ fontSize: 10, color: t.sub, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>Note (optional)</span>
+              <input
+                type="text"
+                value={newNote}
+                onChange={(e) => setNewNote(e.target.value)}
+                placeholder="What did you work on?"
+                style={{ background: t.bg, border: `1px solid ${t.line}`, borderRadius: 8, padding: "7px 10px", color: t.ink, fontSize: 13, outline: "none" }}
+              />
+            </label>
+
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 10.5, color: t.sub }}>
+                {newMinutes != null ? `Duration: ${Math.floor(newMinutes / 60)}h ${newMinutes % 60}m` : ""}
+              </span>
+              <button
+                onClick={saveNewEntry}
+                disabled={newMinutes == null}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 5,
+                  padding: "7px 14px",
+                  borderRadius: 8,
+                  border: "none",
+                  background: newMinutes != null ? t.moss : t.line,
+                  color: newMinutes != null ? t.bg : t.sub,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: newMinutes != null ? "pointer" : "default",
+                }}
+              >
+                <Plus size={13} /> Save entry
+              </button>
+            </div>
+          </div>
         )}
       </div>
+
 
       {hover && (
         <div

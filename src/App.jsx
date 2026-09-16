@@ -793,10 +793,6 @@ export default function FocusApp() {
     }
   }
 
-  function reorderTasks(newTasksOrder) {
-    setTasks(newTasksOrder);
-  }
-
   // D. New handler functions
   function addBreakTask() {
     const text = newBreakTask.trim();
@@ -984,7 +980,6 @@ export default function FocusApp() {
               addTask={addTask}
               toggleTask={toggleTask}
               removeTask={removeTask}
-              reorderTasks={reorderTasks}
               activeTaskId={activeTaskId}
               setActiveTaskId={setActiveTaskId}
               setTaskTarget={setTaskTarget}
@@ -1024,6 +1019,7 @@ export default function FocusApp() {
             <ProgressScreen
               t={t}
               sessions={sessions}
+              setSessions={setSessions}
               tasks={tasks}
               totalToday={totalToday}
               totalAll={totalAll}
