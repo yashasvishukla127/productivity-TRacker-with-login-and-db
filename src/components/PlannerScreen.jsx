@@ -3,7 +3,7 @@ import { ChevronLeft, ChevronRight, Check } from "lucide-react";
 import { todayKey, mondayOf, addDays, resolveRow, slotLabel, isSleepText } from "../utils/dates";
 import { SLEEP_COLOR, taskColor } from "../theme";
 import PlannerCellEditor from "./PlannerCellEditor";
-import ConsistencySection from "./ConsistencySection";
+import MatrixScreen from "./MatrixScreen";
 
 /* ── constants ── */
 const NORMAL_H = 22;
@@ -38,7 +38,7 @@ function buildRunsFromValues(vals) {
 }
 
 /* ── component ── */
-export default function PlannerScreen({ t, planner, setPlanner, eisenhower, dayStartHour, consistencyTasks, setConsistencyTasks }) {
+export default function PlannerScreen({ t, planner, setPlanner, eisenhower, setEisenhower, dayStartHour, procrastinateTasks, setProcrastinateTasks, breakTasks, setBreakTasks }) {
   const [plannerView, setPlannerView] = useState("weekly");
   const [weekStart, setWeekStart] = useState(() => mondayOf(new Date()));
   const [editing, setEditing] = useState(null);
@@ -221,13 +221,21 @@ export default function PlannerScreen({ t, planner, setPlanner, eisenhower, dayS
   return (
     <div>
       <div style={{ display: "flex", gap: 4, marginBottom: 16, background: t.surface, borderRadius: 10, padding: 3 }}>
-        {[{ k: "weekly", label: "Weekly Plan" }, { k: "consistency", label: "Consistency" }].map(({ k, label }) => (
+        {[{ k: "weekly", label: "Weekly Plan" }, { k: "matrix", label: "Matrix" }].map(({ k, label }) => (
           <button key={k} onClick={() => setPlannerView(k)} style={{ flex: 1, minWidth: 56, padding: "7px 0", borderRadius: 8, border: "none", background: plannerView === k ? t.bg : "transparent", color: plannerView === k ? t.ink : t.sub, fontSize: 11.5, fontWeight: 600, cursor: "pointer", boxShadow: plannerView === k ? "0 1px 3px rgba(0,0,0,0.08)" : "none" }}>{label}</button>
         ))}
       </div>
 
-      {plannerView === "consistency" && (
-        <ConsistencySection t={t} consistencyTasks={consistencyTasks} setConsistencyTasks={setConsistencyTasks} />
+      {plannerView === "matrix" && (
+        <MatrixScreen
+          t={t}
+          eisenhower={eisenhower}
+          setEisenhower={setEisenhower}
+          procrastinateTasks={procrastinateTasks}
+          setProcrastinateTasks={setProcrastinateTasks}
+          breakTasks={breakTasks}
+          setBreakTasks={setBreakTasks}
+        />
       )}
 
       {plannerView === "weekly" && (

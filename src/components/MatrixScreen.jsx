@@ -3,6 +3,7 @@ import { Plus, Flame, CalendarClock, Users2, Ban, Sparkles } from "lucide-react"
 import { QUADRANTS } from "../theme";
 import { uid } from "../utils/dates";
 import ExpandableTaskItem from "./ExpandableTaskItem";
+import ProcrastinateBreakBoard from "./ProcrastinateBreakBoard";
 
 const FONT_LINK_ID = "matrix-fraunces-font";
 const DISPLAY_FONT = "'Fraunces', Georgia, 'Times New Roman', serif";
@@ -28,7 +29,7 @@ function mix(hex, target, amt) {
   return `#${((1 << 24) + (r << 16) + (g << 8) + bch).toString(16).slice(1)}`;
 }
 
-export default function MatrixScreen({ t, eisenhower, setEisenhower }) {
+export default function MatrixScreen({ t, eisenhower, setEisenhower, procrastinateTasks, setProcrastinateTasks, breakTasks, setBreakTasks }) {
   const [inputs, setInputs] = useState({ do: "", schedule: "", delegate: "", eliminate: "", none: "" });
   const [expandedIds, setExpandedIds] = useState(new Set());
   const [focusedKey, setFocusedKey] = useState(null);
@@ -198,6 +199,14 @@ export default function MatrixScreen({ t, eisenhower, setEisenhower }) {
           ))}
         </div>
       </div>
+
+      <ProcrastinateBreakBoard
+        t={t}
+        procrastinateTasks={procrastinateTasks}
+        setProcrastinateTasks={setProcrastinateTasks}
+        breakTasks={breakTasks}
+        setBreakTasks={setBreakTasks}
+      />
     </div>
   );
 }

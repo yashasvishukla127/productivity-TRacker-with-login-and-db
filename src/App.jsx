@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Timer as TimerIcon, BarChart3, Moon, Sun, CalendarDays, Grid2x2, Heart, Settings as SettingsIcon } from "lucide-react";
+import { Timer as TimerIcon, BarChart3, Moon, Sun, CalendarDays, LineChart, Heart, Settings as SettingsIcon } from "lucide-react";
 import { MODES, THEMES, TASK_COLORS } from "./theme";
 import { uid, fmt, todayKey, minutesSinceMidnight, addDays } from "./utils/dates";
 import { playSound, DEFAULT_WORK_END_SOUND, DEFAULT_BREAK_END_SOUND } from "./lib/sounds";
@@ -7,7 +7,7 @@ import { enableBackgroundMode, disableBackgroundMode } from "./lib/backgroundMod
 
 import TimerScreen from "./components/TimerScreen";
 import PlannerScreen from "./components/PlannerScreen";
-import MatrixScreen from "./components/MatrixScreen";
+import ChartConsistencyScreen from "./components/ChartConsistencyScreen";
 import ProgressScreen from "./components/ProgressScreen";
 import MotivationScreen from "./components/MotivationScreen";
 import SettingsScreen from "./components/SettingsScreen";
@@ -54,6 +54,7 @@ export default function FocusApp() {
   // A. New state
   const [breakTasks, setBreakTasks] = useState([]);
   const [newBreakTask, setNewBreakTask] = useState("");
+  const [procrastinateTasks, setProcrastinateTasks] = useState([]); // {id, text, done} — Matrix tab's Procrastinate column
 
   const [sessions, setSessions] = useState([]);
   const [customDurations, setCustomDurations] = useState({ pomodoro: { work: 25, rest: 5 }, deepwork: { work: 40, rest: 10 } });
@@ -101,9 +102,9 @@ export default function FocusApp() {
   useEffect(() => {
     (async () => {
       try {
-        const keys = ["tasks", "sessions", "durations", "theme", "themeName", "goal", "eisenhower", "planner", "whyText", "motivationLog", "compareDates", "challengesLog", "sleepSettings", "dayStartHour", "consistencyTasks", "autoContinue", "workEndSoundId", "breakEndSoundId", "breakTasks", "activeTaskId"];
+        const keys = ["tasks", "sessions", "durations", "theme", "themeName", "goal", "eisenhower", "planner", "whyText", "motivationLog", "compareDates", "challengesLog", "sleepSettings", "dayStartHour", "consistencyTasks", "autoContinue", "workEndSoundId", "breakEndSoundId", "breakTasks", "activeTaskId", "procrastinateTasks"];
         const results = await Promise.allSettled(keys.map((k) => storageApi.get(k, false)));
-        const [t, s, c, th, tn, g, ei, pl, why, mo, cd, ch, sl, dsh, ct, ac, wes, bes, bt, atid] = results;
+        const [t, s, c, th, tn, g, ei, pl, why, mo, cd, ch, sl, dsh, ct, ac, wes, bes, bt, atid, pt] = results;
 
         if (t.status === "fulfilled" && t.value) setTasks(JSON.parse(t.value.value));
         if (s.status === "fulfilled" && s.value) setSessions(JSON.parse(s.value.value));
@@ -129,6 +130,7 @@ export default function FocusApp() {
         if (bes.status === "fulfilled" && bes.value) setBreakEndSoundId(JSON.parse(bes.value.value));
         if (bt && bt.status === "fulfilled" && bt.value) setBreakTasks(JSON.parse(bt.value.value));
         if (atid && atid.status === "fulfilled" && atid.value) setActiveTaskId(JSON.parse(atid.value.value));
+        if (pt && pt.status === "fulfilled" && pt.value) setProcrastinateTasks(JSON.parse(pt.value.value));
       } catch (e) {
         console.error("Load error", e);
       } finally {
@@ -394,6 +396,7 @@ export default function FocusApp() {
   useEffect(() => { if (loaded) persist("autoContinue", autoContinue); }, [autoContinue, loaded, persist]);
   useEffect(() => { if (loaded) persist("workEndSoundId", workEndSoundId); }, [workEndSoundId, loaded, persist]);
   useEffect(() => { if (loaded) persist("breakEndSoundId", breakEndSoundId); }, [breakEndSoundId, loaded, persist]);
+  useEffect(() => { if (loaded) persist("procrastinateTasks", procrastinateTasks); }, [procrastinateTasks, loaded, persist]);
 
   useEffect(() => {
     if (!running) return;
@@ -892,7 +895,7 @@ export default function FocusApp() {
   const NAV = [
     { key: "timer", icon: TimerIcon, label: "Timer" },
     { key: "planner", icon: CalendarDays, label: "Planner" },
-    { key: "matrix", icon: Grid2x2, label: "Matrix" },
+    { key: "matrix", icon: LineChart, label: "Chart" },
     { key: "progress", icon: BarChart3, label: "Progress" },
     { key: "motivation", icon: Heart, label: "Why" }
   ];
@@ -1001,17 +1004,24 @@ export default function FocusApp() {
               planner={planner}
               setPlanner={setPlanner}
               eisenhower={eisenhower}
+              setEisenhower={setEisenhower}
               dayStartHour={dayStartHour}
-              consistencyTasks={consistencyTasks}
-              setConsistencyTasks={setConsistencyTasks}
+              procrastinateTasks={procrastinateTasks}
+              setProcrastinateTasks={setProcrastinateTasks}
+              breakTasks={breakTasks}
+              setBreakTasks={setBreakTasks}
             />
           )}
 
           {screen === "matrix" && (
-            <MatrixScreen
+            <ChartConsistencyScreen
               t={t}
-              eisenhower={eisenhower}
-              setEisenhower={setEisenhower}
+              sessions={sessions}
+              totalAll={totalAll}
+              dailyGoalMinutes={dailyGoalMinutes}
+              tasks={tasks}
+              consistencyTasks={consistencyTasks}
+              setConsistencyTasks={setConsistencyTasks}
             />
           )}
 
