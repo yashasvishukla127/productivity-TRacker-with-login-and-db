@@ -12,7 +12,7 @@ import ProgressScreen from "./components/ProgressScreen";
 import MotivationScreen from "./components/MotivationScreen";
 import SettingsScreen from "./components/SettingsScreen";
 import LogTimeModal from "./components/LogTimeModal";
-import { saveActiveTimer, loadActiveTimer, clearActiveTimer, remainingFromEnd, elapsedStopwatch, resolveElapsedPhases } from "./lib/timerEngine";
+import { saveActiveTimer, loadActiveTimer, clearActiveTimer, remainingFromEnd, elapsedStopwatch, resolveElapsedPhases, saveDraftSession, loadDraftSession, clearDraftSession } from "./lib/timerEngine";
 import { initNotifications, scheduleSessionEnd, cancelSessionEnd, TIMER_NOTIFICATION_ID } from "./lib/notifications";
 import { getQueuedWrites, clearQueuedWrite } from "./lib/offlineQueue";
 
@@ -76,6 +76,12 @@ export default function FocusApp() {
 
   const intervalRef = useRef(null);
   const sessionStartRef = useRef(null);
+  // Stable identity for the run currently in progress. Set once when a run
+  // genuinely starts, carried through pause/resume (and app restarts, via
+  // saveDraftSession) untouched, and cleared once `finish` commits it. This
+  // is what makes pause + finish upsert into ONE sessions record instead of
+  // each producing its own independent write.
+  const sessionIdRef = useRef(null);
   const saveTimeout = useRef({});
   const stoppingRef = useRef(false);
 
@@ -161,10 +167,18 @@ export default function FocusApp() {
 
       if (active.running && active.stopwatchStartTimestamp) {
         setStopwatchSecs(elapsedStopwatch(active.stopwatchStartTimestamp, active.stopwatchBaseSecs));
-        sessionStartRef.current = active.stopwatchStartTimestamp - active.stopwatchBaseSecs * 1000;
+        restoreOrBeginSession(active.stopwatchStartTimestamp - active.stopwatchBaseSecs * 1000);
         setRunning(true);
       } else {
         setStopwatchSecs(active.stopwatchBaseSecs || 0);
+        // Paused: keep whatever draft session (id/start time) was already
+        // in flight, if any, so a later resume + finish still resolves to
+        // one record. Nothing to restore into sessionStartRef until then.
+        const draft = loadDraftSession();
+        if (draft) {
+          sessionStartRef.current = draft.startTimestamp;
+          sessionIdRef.current = draft.id;
+        }
       }
 
       return;
@@ -172,6 +186,11 @@ export default function FocusApp() {
 
     setModeKey(active.modeKey);
     setPhase(active.phase);
+
+    // Load once up front: this is the identity of whatever run/phase was
+    // in flight when the app was last open, before any background catch-up
+    // below potentially completes it or moves past it.
+    const draftAtMount = loadDraftSession();
 
     if (active.running && active.endTimestamp) {
       const remaining = remainingFromEnd(active.endTimestamp);
@@ -184,8 +203,19 @@ export default function FocusApp() {
           durations: durs
         });
 
-        resolved.completedWorkPhases.forEach((cwp) => {
-          logSession(cwp.minutes, active.modeKey, new Date(cwp.startTimestamp), "", activeTaskId);
+        resolved.completedWorkPhases.forEach((cwp, idx) => {
+          // The first completed phase is the continuation of whatever
+          // session was already tracked before the app closed; any further
+          // ones fully started and finished in the background gap, so each
+          // gets its own fresh identity.
+          logSession(
+            cwp.minutes,
+            active.modeKey,
+            new Date(cwp.startTimestamp),
+            "",
+            activeTaskId,
+            idx === 0 && draftAtMount ? draftAtMount.id : undefined
+          );
         });
 
         if (resolved.completedWorkPhases.length > 0 && activeTaskId) {
@@ -201,6 +231,7 @@ export default function FocusApp() {
         if (!autoContinue || resolved.hitCap) {
           const fullSecs = (resolved.phase === "work" ? durs.work : durs.rest) * 60;
 
+          endSession(); // landed paused at a phase boundary; nothing in flight
           setSecondsLeft(fullSecs);
           setRunning(false);
 
@@ -217,9 +248,15 @@ export default function FocusApp() {
           setSecondsLeft(resolved.remainingSeconds);
           setRunning(true);
 
-          sessionStartRef.current =
+          // Catch-up crossed at least one full phase boundary while
+          // backgrounded (already logged above), so landing here is always
+          // a new phase instance — mint a fresh session identity rather
+          // than reusing whatever draft belonged to the phase(s) just
+          // completed.
+          beginSession(
             resolved.endTimestamp -
-            (resolved.phase === "work" ? durs.work : durs.rest) * 60 * 1000;
+              (resolved.phase === "work" ? durs.work : durs.rest) * 60 * 1000
+          );
 
           saveActiveTimer({
             modeKey: active.modeKey,
@@ -240,11 +277,21 @@ export default function FocusApp() {
           );
         }
       } else {
+        // Still mid-phase, was running before restart — same session as
+        // before, just recompute the countdown from the wall clock.
+        restoreOrBeginSession(active.endTimestamp - (active.phase === "work" ? customDurations[active.modeKey].work : customDurations[active.modeKey].rest) * 60 * 1000);
         setSecondsLeft(remaining);
         setRunning(true);
       }
     } else if (active.remainingSeconds != null) {
       setSecondsLeft(active.remainingSeconds);
+      // Paused across a restart: keep whatever draft session was in
+      // flight, if any.
+      const draft = loadDraftSession();
+      if (draft) {
+        sessionStartRef.current = draft.startTimestamp;
+        sessionIdRef.current = draft.id;
+      }
     }
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -270,6 +317,7 @@ export default function FocusApp() {
 
         if (remaining <= 0) {
           const durs = customDurations[modeKey];
+          const draftBeforeCatchup = loadDraftSession();
 
           const resolved = resolveElapsedPhases({
             phase,
@@ -277,8 +325,15 @@ export default function FocusApp() {
             durations: durs
           });
 
-          resolved.completedWorkPhases.forEach((cwp) => {
-            logSession(cwp.minutes, modeKey, new Date(cwp.startTimestamp), "", activeTaskId);
+          resolved.completedWorkPhases.forEach((cwp, idx) => {
+            logSession(
+              cwp.minutes,
+              modeKey,
+              new Date(cwp.startTimestamp),
+              "",
+              activeTaskId,
+              idx === 0 && draftBeforeCatchup ? draftBeforeCatchup.id : undefined
+            );
           });
 
           if (resolved.completedWorkPhases.length > 0 && activeTaskId) {
@@ -297,6 +352,7 @@ export default function FocusApp() {
             const fullSecs =
               (resolved.phase === "work" ? durs.work : durs.rest) * 60;
 
+            endSession(); // landed paused at a phase boundary; nothing in flight
             setSecondsLeft(fullSecs);
             setRunning(false);
             cancelSessionEnd(TIMER_NOTIFICATION_ID);
@@ -314,11 +370,14 @@ export default function FocusApp() {
             setSecondsLeft(resolved.remainingSeconds);
             setRunning(true);
 
-            sessionStartRef.current =
+            // New phase instance (catch-up already logged the ones that
+            // fully completed above) — fresh identity, not the old draft.
+            beginSession(
               resolved.endTimestamp -
-              (resolved.phase === "work" ? durs.work : durs.rest) *
-                60 *
-                1000;
+                (resolved.phase === "work" ? durs.work : durs.rest) *
+                  60 *
+                  1000
+            );
 
             saveActiveTimer({
               modeKey,
@@ -423,24 +482,88 @@ export default function FocusApp() {
     playSound(justFinishedPhase === "work" ? workEndSoundId : breakEndSoundId);
   }
 
-  function logSession(minutes, mode, startDate, note, taskId) {
+  // Insert `entry` by its id, or overwrite the existing record with that id
+  // if one is already there. This is the dedup backstop from requirement 4:
+  // even if a duplicate write somehow slips through (a stray double-call, a
+  // retried offline write, stale data from before this fix), a second write
+  // for the same session id merges into the existing record instead of
+  // appending a second one.
+  function upsertSession(list, entry) {
+    const idx = list.findIndex((s) => s.id === entry.id);
+    if (idx === -1) return [...list, entry];
+    const next = list.slice();
+    next[idx] = entry;
+    return next;
+  }
+
+  // Give the run currently in progress a stable id + real-world start time,
+  // persisted so it survives pause and app restarts. Only assigns a fresh
+  // identity if one isn't already in flight — call this once per genuinely
+  // new run/phase, not on every resume.
+  function beginSession(startTimestamp) {
+    sessionStartRef.current = startTimestamp;
+    sessionIdRef.current = uid();
+    saveDraftSession({ id: sessionIdRef.current, startTimestamp });
+  }
+
+  // Clear the in-flight session identity once `finish` (or a natural phase
+  // completion) has committed it, so the next run gets its own fresh id
+  // instead of accidentally reusing/overwriting this one.
+  function endSession() {
+    sessionIdRef.current = null;
+    sessionStartRef.current = null;
+    clearDraftSession();
+  }
+
+  // Used when the app reopens onto an already-in-progress run (not a fresh
+  // phase): reuse the persisted draft session's id/start time if one is
+  // there, so this restart doesn't fork off a second record for a run that
+  // was already going. Only falls back to minting a new id if no draft was
+  // saved (e.g. data from before this fix existed).
+  function restoreOrBeginSession(fallbackStart) {
+    const draft = loadDraftSession();
+    if (draft) {
+      sessionStartRef.current = draft.startTimestamp;
+      sessionIdRef.current = draft.id;
+    } else {
+      beginSession(fallbackStart);
+    }
+  }
+
+  // Best-effort mirror of a session record into the dedicated `sessions`
+  // table (see supabase/schema.sql), which upserts on its `id` primary key
+  // — a real ON CONFLICT DO UPDATE, not just an in-memory array merge. This
+  // is the strongest guarantee against duplicates: even if two devices, or
+  // an offline retry, both write the same session id, the database itself
+  // collapses them into one row instead of the array-based JSONB blob
+  // silently keeping both if a race ever slips past the client-side upsert
+  // above. window.sessionsAdapter is only set once the user is signed in
+  // (see AuthGate.jsx), so this is skipped gracefully before that / offline.
+  function syncSessionToTable(entry) {
+    if (typeof window === "undefined" || !window.sessionsAdapter) return;
+    window.sessionsAdapter.upsertSession(entry).catch((e) => {
+      console.error("Failed to sync session to sessions table", e);
+    });
+  }
+
+  function logSession(minutes, mode, startDate, note, taskId, sessionId) {
     if (minutes <= 0) return;
 
     const sd = startDate || new Date();
 
-    setSessions((prev) => [
-      ...prev,
-      {
-        id: uid(),
-        date: todayKey(sd),
-        startMinutes: minutesSinceMidnight(sd),
-        minutes,
-        mode,
-        manual: false,
-        note: note || "",
-        taskId: taskId || null
-      }
-    ]);
+    const entry = {
+      id: sessionId || uid(),
+      date: todayKey(sd),
+      startMinutes: minutesSinceMidnight(sd),
+      minutes,
+      mode,
+      manual: false,
+      note: note || "",
+      taskId: taskId || null
+    };
+
+    setSessions((prev) => upsertSession(prev, entry));
+    syncSessionToTable(entry);
   }
 
   function startPhaseAuto(nextPhase, forModeKey, durs) {
@@ -448,7 +571,8 @@ export default function FocusApp() {
 
     const endTimestamp = Date.now() + durationMinutes * 60 * 1000;
 
-    sessionStartRef.current = Date.now();
+    // Auto-continuing into work<->rest is always a brand new phase/session.
+    beginSession(Date.now());
     setPhase(nextPhase);
     setSecondsLeft(durationMinutes * 60);
     setRunning(true);
@@ -485,7 +609,8 @@ export default function FocusApp() {
         modeKey,
         sessionStartRef.current ? new Date(sessionStartRef.current) : new Date(),
         activeTask ? activeTask.text : "",
-        activeTask ? activeTask.id : null
+        activeTask ? activeTask.id : null,
+        sessionIdRef.current
       );
 
       if (activeTaskId) {
@@ -499,6 +624,7 @@ export default function FocusApp() {
       if (autoContinue) {
         startPhaseAuto("rest", modeKey, durs);
       } else {
+        endSession(); // work phase is committed above; nothing left in flight
         setRunning(false);
         disableBackgroundMode();
         cancelSessionEnd(TIMER_NOTIFICATION_ID);
@@ -519,6 +645,7 @@ export default function FocusApp() {
       if (autoContinue) {
         startPhaseAuto("work", modeKey, durs);
       } else {
+        endSession(); // rest phase isn't logged; nothing left in flight either way
         setRunning(false);
         disableBackgroundMode();
         cancelSessionEnd(TIMER_NOTIFICATION_ID);
@@ -548,7 +675,13 @@ export default function FocusApp() {
       }
       await storageApi.set("activeLock", JSON.stringify({ deviceId, startedAt: Date.now(), modeKey, activeTaskId }), false);
 
-      sessionStartRef.current = Date.now();
+      // Only mint a new session identity on a genuine fresh start. If
+      // sessionIdRef is already set, this is a resume of a run that was
+      // paused (not finished) — keep the same id/start time so finishing
+      // it later upserts into the one record instead of starting another.
+      if (!sessionIdRef.current) {
+        beginSession(Date.now());
+      }
       setRunning(true);
       enableBackgroundMode();
 
@@ -589,19 +722,13 @@ export default function FocusApp() {
       clearInterval(intervalRef.current);
       cancelSessionEnd(TIMER_NOTIFICATION_ID);
 
+      // Pausing never writes to the sessions log — it only holds the
+      // elapsed progress locally (here, and in the persisted draft session
+      // id/start time above). The one and only sessions-array write for
+      // this run happens when it's actually finished (stopSession/reset),
+      // or completes naturally (handlePhaseEnd). This is what stops pause
+      // + finish from producing two records for one continuous session.
       if (modeKey === "stopwatch") {
-        if (stopwatchSecs > 0) {
-          const activeTask = tasks.find((tk) => tk.id === activeTaskId);
-
-          logSession(
-            Math.round(stopwatchSecs / 60),
-            "stopwatch",
-            new Date(sessionStartRef.current),
-            activeTask ? activeTask.text : "",
-            activeTask?.id
-          );
-        }
-
         saveActiveTimer({
           modeKey,
           phase,
@@ -634,6 +761,8 @@ export default function FocusApp() {
     cancelSessionEnd(TIMER_NOTIFICATION_ID);
     storageApi.set("activeLock", JSON.stringify(null), false);
 
+    const resetSessionId = sessionIdRef.current;
+
     if (modeKey === "stopwatch") {
       if (stopwatchSecs > 0) {
         const activeTask = tasks.find((tk) => tk.id === activeTaskId);
@@ -643,10 +772,12 @@ export default function FocusApp() {
           "stopwatch",
           sessionStartRef.current ? new Date(sessionStartRef.current) : new Date(),
           activeTask ? activeTask.text : "",
-          activeTask?.id
+          activeTask?.id,
+          resetSessionId
         );
       }
 
+      endSession();
       setStopwatchSecs(0);
       clearActiveTimer();
     } else {
@@ -662,10 +793,12 @@ export default function FocusApp() {
           modeKey,
           sessionStartRef.current ? new Date(sessionStartRef.current) : new Date(),
           activeTask ? activeTask.text : "",
-          activeTask?.id
+          activeTask?.id,
+          resetSessionId
         );
       }
 
+      endSession();
       setPhase("work");
       setSecondsLeft(durs.work * 60);
 
@@ -690,6 +823,8 @@ export default function FocusApp() {
     cancelSessionEnd(TIMER_NOTIFICATION_ID);
     storageApi.set("activeLock", JSON.stringify(null), false);
 
+    const finishSessionId = sessionIdRef.current;
+
     if (modeKey === "stopwatch") {
       if (stopwatchSecs > 0) {
         const activeTask = tasks.find((tk) => tk.id === activeTaskId);
@@ -697,12 +832,14 @@ export default function FocusApp() {
         logSession(
           Math.round(stopwatchSecs / 60),
           "stopwatch",
-          new Date(sessionStartRef.current),
+          sessionStartRef.current ? new Date(sessionStartRef.current) : new Date(),
           activeTask ? activeTask.text : "",
-          activeTask?.id
+          activeTask?.id,
+          finishSessionId
         );
       }
 
+      endSession();
       setStopwatchSecs(0);
       clearActiveTimer();
     } else {
@@ -718,10 +855,12 @@ export default function FocusApp() {
           modeKey,
           sessionStartRef.current ? new Date(sessionStartRef.current) : new Date(),
           activeTask ? activeTask.text : "",
-          activeTask?.id
+          activeTask?.id,
+          finishSessionId
         );
       }
 
+      endSession();
       setPhase("work");
       setSecondsLeft(durs.work * 60);
 
@@ -741,6 +880,8 @@ export default function FocusApp() {
     setRunning(false);
     clearInterval(intervalRef.current);
     cancelSessionEnd(TIMER_NOTIFICATION_ID);
+    endSession(); // switching modes abandons whatever run was in flight
+    storageApi.set("activeLock", JSON.stringify(null), false);
 
     setModeKey(key);
     setPhase("work");
@@ -823,17 +964,17 @@ export default function FocusApp() {
       mode: "manual",
       manual: true,
       note: note || ""
-  };
+    };
 
-  setSessions((prev) => {
-    const next = [...prev, newSession];
-    writeCache("sessions", JSON.stringify(next));
-    return next;
-  });
-
-  persistSession(newSession);
-  setShowLogModal(false);
-}
+    // setSessions alone is enough — the persist("sessions", sessions) effect
+    // above already writes the updated array to storage whenever `sessions`
+    // changes, so there's no separate JSONB write needed here. We also
+    // mirror it into the dedicated sessions table for the stronger
+    // DB-level dedup guarantee (see syncSessionToTable).
+    setSessions((prev) => upsertSession(prev, newSession));
+    syncSessionToTable(newSession);
+    setShowLogModal(false);
+  }
   const today = todayKey();
   const totalToday = sessions.filter((s) => s.date === today).reduce((a, s) => a + s.minutes, 0);
   const totalAll = sessions.reduce((a, s) => a + s.minutes, 0);

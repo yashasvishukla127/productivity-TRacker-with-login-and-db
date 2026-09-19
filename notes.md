@@ -89,6 +89,8 @@ git pull
 
 
 # 3. BUILD THE LATEST WEB VERSION
+cd..
+
 npm run build
 Get-ChildItem .\dist -Recurse -File |
 Sort-Object LastWriteTime -Descending |
@@ -107,7 +109,8 @@ cd android
 .\gradlew.bat assembleDebug
 .\gradlew.bat clean
 .\gradlew.bat assembleDebug
-
+..
+.
 
 # IMPORTANT:
 # The Android index-*.js should have the SAME filename and

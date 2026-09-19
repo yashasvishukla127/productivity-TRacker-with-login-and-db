@@ -40,6 +40,42 @@ export function clearActiveTimer() {
   }
 }
 
+// Identity of the session/timer run currently in progress: a stable id
+// plus the real-world timestamp it actually started at. This is what
+// lets pause -> resume -> finish resolve to ONE sessions-array record
+// instead of a fresh one every time the run is touched. It's set once
+// when a run genuinely starts (or auto-continues into a new phase) and
+// carried through pause/resume/app-restart until `finish` commits it,
+// at which point it's cleared so the next run gets a new identity.
+const DRAFT_SESSION_KEY = "focusmeter_draft_session";
+
+// Shape: { id: string, startTimestamp: number }
+export function saveDraftSession(meta) {
+  try {
+    window.localStorage.setItem(DRAFT_SESSION_KEY, JSON.stringify(meta));
+  } catch (e) {
+    console.error("Failed to save draft session", e);
+  }
+}
+
+export function loadDraftSession() {
+  try {
+    const raw = window.localStorage.getItem(DRAFT_SESSION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    console.error("Failed to load draft session", e);
+    return null;
+  }
+}
+
+export function clearDraftSession() {
+  try {
+    window.localStorage.removeItem(DRAFT_SESSION_KEY);
+  } catch (e) {
+    console.error("Failed to clear draft session", e);
+  }
+}
+
 // Recompute remaining seconds for a countdown phase from its end timestamp.
 // Returns 0 or below if the phase has already finished while backgrounded.
 export function remainingFromEnd(endTimestamp) {
